@@ -6,6 +6,17 @@
 #include "pcl_accessor.h"
 #include "ref_accessor.h"
 
+/**
+ * @brief MiniPrinterでEIFを初期化する。
+ *
+ * 製品制御IFにPCL Accessor、システム情報IF・設定保存IFにREF Accessorをつなぐ。
+ * どのAccessorも、MiniPrinterの対応表（models/MiniPrinter/）を使う。
+ *
+ * @retval EIF_OK                 初期化済み
+ * @retval EIF_ERR_INVALID_CONFIG Accessorの関数が欠けている
+ *
+ * @note 起動処理のスレッド [C1] から1回呼ぶ。
+ */
 EIF_Result EIF_Setup(void)
 {
     static const EIF_AccessorSet acc = {

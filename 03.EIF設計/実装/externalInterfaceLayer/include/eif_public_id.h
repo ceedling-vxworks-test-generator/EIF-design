@@ -12,54 +12,54 @@
 extern "C" {
 #endif
 
-/** @brief 公開要求ID。 */
+/** @brief 公開要求ID（PCLの製品要求に対応する）。 */
 typedef enum {
-    EIF_REQ_INVALID = 0,
-    EIF_REQ_PRINT,
-    EIF_REQ_TEST_PRINT,
-    EIF_REQ_HEAD_CLEANING,
-    EIF_REQ_WIPER_MAINTENANCE,
-    EIF_REQ_HUMIDIFIER_MAINTENANCE,
-    EIF_REQ_INK_INTRODUCTION,
-    EIF_REQ_TUBE_AIR_REMOVAL,
-    EIF_REQ_CAP_PUMP_CHECK,
-    EIF_REQ_PAUSE,
-    EIF_REQ_RESUME,
-    EIF_REQ_COUNT
+    EIF_REQ_INVALID = 0,             /**< 無効値（PCL経由の設定変更の完了通知でも使う） */
+    EIF_REQ_PRINT,                   /**< 印刷 */
+    EIF_REQ_TEST_PRINT,              /**< テスト印刷 */
+    EIF_REQ_HEAD_CLEANING,           /**< ヘッドクリーニング */
+    EIF_REQ_WIPER_MAINTENANCE,       /**< ワイパーメンテナンス */
+    EIF_REQ_HUMIDIFIER_MAINTENANCE,  /**< 加湿器メンテナンス */
+    EIF_REQ_INK_INTRODUCTION,        /**< インク導入 */
+    EIF_REQ_TUBE_AIR_REMOVAL,        /**< チューブのエア抜き */
+    EIF_REQ_CAP_PUMP_CHECK,          /**< キャップ・ポンプ確認 */
+    EIF_REQ_PAUSE,                   /**< 一時停止（取消とは別の要求） */
+    EIF_REQ_RESUME,                  /**< 再開 */
+    EIF_REQ_COUNT                    /**< 個数（番兵） */
 } eif_request_id_t;
 
-/** @brief 公開情報ID。 */
+/** @brief 公開情報ID（REFが保持するシステム情報のうち、外部へ公開するもの）。 */
 typedef enum {
-    EIF_INFO_INVALID = 0,
-    EIF_INFO_NETWORK_SETTINGS,
-    EIF_INFO_PRINT_SETTINGS,
-    EIF_INFO_AMBIENT_STATUS,
-    EIF_INFO_MAINTENANCE_STATUS,
-    EIF_INFO_DEVICE_INFORMATION,
-    EIF_INFO_SOFTWARE_INFORMATION,
-    EIF_INFO_JOB,
-    EIF_INFO_ALARM_LIST,          /**< 発生中のアラーム一覧（差分の導出に使う） */
-    EIF_INFO_COUNT
+    EIF_INFO_INVALID = 0,            /**< 無効値 */
+    EIF_INFO_NETWORK_SETTINGS,       /**< ネットワーク設定（eif_network_settings_t） */
+    EIF_INFO_PRINT_SETTINGS,         /**< 印刷設定 */
+    EIF_INFO_AMBIENT_STATUS,         /**< 環境状態 */
+    EIF_INFO_MAINTENANCE_STATUS,     /**< メンテナンス状態 */
+    EIF_INFO_DEVICE_INFORMATION,     /**< 機器情報 */
+    EIF_INFO_SOFTWARE_INFORMATION,   /**< ソフトウェア情報 */
+    EIF_INFO_JOB,                    /**< ジョブ情報（QA-05） */
+    EIF_INFO_ALARM_LIST,             /**< 発生中のアラーム一覧（eif_alarm_list_t。差分の導出に使う） */
+    EIF_INFO_COUNT                   /**< 個数（番兵） */
 } eif_info_id_t;
 
-/** @brief 公開設定ID。 */
+/** @brief 公開設定ID（外部から変更できる設定）。 */
 typedef enum {
-    EIF_SETTING_INVALID = 0,
-    EIF_SETTING_NETWORK,
-    EIF_SETTING_PRINT,
-    EIF_SETTING_COUNT
+    EIF_SETTING_INVALID = 0,         /**< 無効値 */
+    EIF_SETTING_NETWORK,             /**< ネットワーク設定（パッチ：eif_network_settings_patch_t） */
+    EIF_SETTING_PRINT,               /**< 印刷設定 */
+    EIF_SETTING_COUNT                /**< 個数（番兵） */
 } eif_setting_id_t;
 
 /** @brief 公開イベントID。値は32未満とする（Connectorの受信フィルタをビット列で持つため）。 */
 typedef enum {
-    EIF_EVT_INVALID = 0,
-    EIF_EVT_ERROR_RAISED,
-    EIF_EVT_ERROR_RESOLVED,
-    EIF_EVT_WARNING_RAISED,
-    EIF_EVT_WARNING_RESOLVED,
-    EIF_EVT_INK_LEVEL_CHANGED,
-    EIF_EVT_JOB_PROGRESS,
-    EIF_EVT_COUNT
+    EIF_EVT_INVALID = 0,             /**< 無効値 */
+    EIF_EVT_ERROR_RAISED,            /**< エラー発生（payload.alarm） */
+    EIF_EVT_ERROR_RESOLVED,          /**< エラー解消（payload.alarm） */
+    EIF_EVT_WARNING_RAISED,          /**< 警告発生（payload.alarm） */
+    EIF_EVT_WARNING_RESOLVED,        /**< 警告解消（payload.alarm） */
+    EIF_EVT_INK_LEVEL_CHANGED,       /**< インク残量の変化 */
+    EIF_EVT_JOB_PROGRESS,            /**< ジョブの進捗（QA-05） */
+    EIF_EVT_COUNT                    /**< 個数（番兵） */
 } eif_event_id_t;
 
 #ifdef __cplusplus

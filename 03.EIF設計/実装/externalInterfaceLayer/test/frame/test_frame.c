@@ -1,6 +1,8 @@
 /**
  * @file test_frame.c
  * @brief Frameの単体試験。スタブAccessorだけで動かす（PCL・REFのヘッダーは一切使わない）。
+ *
+ * 2つの試験用Connector（A：異常の発生／解消を受信、B：イベントを受信しない）を登録して確認する。
  */
 #include <string.h>
 
@@ -12,21 +14,30 @@
 int g_test_failures = 0;
 int g_test_runs = 0;
 
+/** @brief 試験用Connectorが受け取った内容の記録。 */
 typedef struct {
-    int completed;
-    EIF_RequestHandle handle;
-    uint64_t token;
-    EIF_RequestOutcome outcome;
-    int events;
-    eif_event_id_t last_event;
-    char last_alarm[EIF_ALARM_TEXT_LEN];
+    int completed;                       /**< 完了callbackの回数 */
+    EIF_RequestHandle handle;            /**< 最後の完了の要求ハンドル */
+    uint64_t token;                      /**< 最後の完了の要求元トークン */
+    EIF_RequestOutcome outcome;          /**< 最後の完了の終端結果 */
+    int events;                          /**< イベントcallbackの回数 */
+    eif_event_id_t last_event;           /**< 最後のイベントID */
+    char last_alarm[EIF_ALARM_TEXT_LEN]; /**< 最後のイベントの alarm_id */
 } conn_t;
 
-static conn_t s_a;
-static conn_t s_b;
-static EIF_ConnectorId s_id_a;
-static EIF_ConnectorId s_id_b;
+static conn_t s_a;              /**< Connector A の記録 */
+static conn_t s_b;              /**< Connector B の記録 */
+static EIF_ConnectorId s_id_a;  /**< Connector A のID */
+static EIF_ConnectorId s_id_b;  /**< Connector B のID */
 
+/**
+ * @brief 試験用Connectorの完了callback。受け取った内容を記録する。
+ * @param[in] h     要求ハンドル
+ * @param[in] r     公開要求ID（使わない）
+ * @param[in] token 要求元トークン
+ * @param[in] o     終端結果
+ * @param[in] ctx   記録先（conn_t*）
+ */
 static void on_completed(EIF_RequestHandle h, eif_request_id_t r, uint64_t token, EIF_RequestOutcome o, void *ctx)
 {
     conn_t *c = (conn_t *)ctx;
@@ -37,6 +48,11 @@ static void on_completed(EIF_RequestHandle h, eif_request_id_t r, uint64_t token
     c->outcome = o;
 }
 
+/**
+ * @brief 試験用Connectorのイベントcallback。受け取った内容を記録する。
+ * @param[in] e   公開イベント
+ * @param[in] ctx 記録先（conn_t*）
+ */
 static void on_event(const EIF_Event *e, void *ctx)
 {
     conn_t *c = (conn_t *)ctx;
@@ -45,6 +61,7 @@ static void on_event(const EIF_Event *e, void *ctx)
     memcpy(c->last_alarm, e->payload.alarm.alarm_id, EIF_ALARM_TEXT_LEN);
 }
 
+/** @brief 前処理：Frame・スタブ・記録をすべて初期状態に戻す（未初期化）。 */
 static void setup_none(void)
 {
     EIF_Frame_ResetForTest();
@@ -53,6 +70,7 @@ static void setup_none(void)
     memset(&s_b, 0, sizeof(s_b));
 }
 
+/** @brief 前処理：初期化 → Connector A・B を登録 → 開始 まで済ませる。 */
 static void setup_started(void)
 {
     static const eif_event_id_t filter[] = { EIF_EVT_ERROR_RAISED, EIF_EVT_ERROR_RESOLVED };
@@ -65,6 +83,11 @@ static void setup_started(void)
     (void)EIF_Start();
 }
 
+/**
+ * @brief REF Accessorからの変化通知を再現する（アラーム一覧を渡す）。
+ * @param[in] ids アラームIDの配列
+ * @param[in] n   件数
+ */
 static void push_alarms(const char *const *ids, unsigned n)
 {
     eif_alarm_list_t l;
@@ -76,8 +99,9 @@ static void push_alarms(const char *const *ids, unsigned n)
     g_stub.watch_fn(EIF_INFO_ALARM_LIST, &l, sizeof(l), g_stub.watch_ctx); /* REF Accessorからの変化通知を再現 */
 }
 
-/* ---------------------------------------------------------------- */
+/* ---------------------------------------------------------------- 試験 */
 
+/** @brief 構成の検証：NULLは INVALID_PARAM、下位IFが欠けていれば INVALID_CONFIG で、未初期化のまま。 */
 static void test_initialize_rejects_incomplete_accessors(void)
 {
     EIF_AccessorSet p = g_stub_accessors;
@@ -87,6 +111,7 @@ static void test_initialize_rejects_incomplete_accessors(void)
     TEST_EQ(EIF_Start(), EIF_ERR_UNAVAILABLE);
 }
 
+/** @brief 開始：通知定義表の情報だけ監視を依頼し、完了トランポリンが渡されている。 */
 static void test_start_watches_only_supported_info(void)
 {
     TEST_EQ(EIF_Frame_Initialize(&g_stub_accessors), EIF_OK);
@@ -95,6 +120,7 @@ static void test_start_watches_only_supported_info(void)
     TEST_ASSERT(g_stub.done != NULL); /* 完了の受け口がつながっている */
 }
 
+/** @brief 公開範囲：対応表に無い要求は NOT_EXPOSED で、要求ハンドルは0。 */
 static void test_not_exposed_request(void)
 {
     EIF_RequestHandle h = 7U;
@@ -102,6 +128,7 @@ static void test_not_exposed_request(void)
     TEST_EQ(h, 0U);
 }
 
+/** @brief 振り分け：A・Bが要求し、逆順に完了しても、それぞれの要求元にだけ届く。 */
 static void test_completion_routed_to_origin(void)
 {
     EIF_RequestHandle ha = 0U;
@@ -118,6 +145,7 @@ static void test_completion_routed_to_origin(void)
     TEST_EQ(s_a.outcome, EIF_OUTCOME_COMPLETED);
 }
 
+/** @brief 先着完了：submit の中で完了が届いても、Submitの戻りまでに要求元へ1回通知される。 */
 static void test_early_completion(void)
 {
     EIF_RequestHandle h = 0U;
@@ -127,6 +155,7 @@ static void test_early_completion(void)
     TEST_EQ(s_a.handle, h);
 }
 
+/** @brief 取消：要求元以外のConnectorからは取り消せない。 */
 static void test_cancel_only_by_origin(void)
 {
     EIF_RequestHandle h = 0U;
@@ -136,6 +165,7 @@ static void test_cancel_only_by_origin(void)
     TEST_EQ(g_stub.last_cancel, 1U);
 }
 
+/** @brief 情報取得：公開している情報は取得でき、公開していない情報・サイズ違いは拒否される。 */
 static void test_get_info(void)
 {
     eif_network_settings_t m;
@@ -145,6 +175,7 @@ static void test_get_info(void)
     TEST_EQ(EIF_GetInfo(EIF_INFO_NETWORK_SETTINGS, &m, 3U), EIF_ERR_INVALID_PARAM);
 }
 
+/** @brief 設定変更（REF直接）：指定した項目だけ変わり、未指定の項目は現在値のまま保存される。 */
 static void test_patch_merges_public_model_in_frame(void)
 {
     eif_network_settings_patch_t p;
@@ -159,6 +190,7 @@ static void test_patch_merges_public_model_in_frame(void)
     TEST_ASSERT(strcmp(g_stub.stored.hostname, "mp") == 0);   /* 未指定は現在値 */
 }
 
+/** @brief 設定変更（PCL経由）：store() が EIF_ACCEPTED なら追跡され、完了が要求元へ届く。 */
 static void test_patch_via_pcl_accessor_is_tracked(void)
 {
     eif_network_settings_patch_t p;
@@ -172,6 +204,7 @@ static void test_patch_via_pcl_accessor_is_tracked(void)
     TEST_EQ(s_a.token, 77U);
 }
 
+/** @brief 差分：初回は全件発生、消えたものは解消、変化なしは通知なし。受信フィルタ外には届かない。 */
 static void test_alarm_list_diff_in_frame(void)
 {
     const char *first[] = { "E1", "E2" };
@@ -187,6 +220,10 @@ static void test_alarm_list_diff_in_frame(void)
     TEST_EQ(s_a.events, 3);           /* 変化なし */
 }
 
+/**
+ * @brief 試験の入口。
+ * @return 失敗が無ければ0
+ */
 int main(void)
 {
     printf("== Frame tests\n");

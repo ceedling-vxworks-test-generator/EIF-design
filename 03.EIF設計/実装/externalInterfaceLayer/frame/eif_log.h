@@ -7,7 +7,15 @@
 #ifndef EIF_LOG_H
 #define EIF_LOG_H
 
+/** @brief ログのモジュール名。 */
 #define EIF_LOG_MODULE "eif"
+
+/*
+ * EIF_LOG_ERROR(fmt, ...) … 異常（処理を続けられない、データを捨てた）
+ * EIF_LOG_WARN(fmt, ...)  … 想定外だが処理は続ける
+ * EIF_LOG_INFO(fmt, ...)  … 動作の記録（標準エラー出力の場合は出さない）
+ * EIF_LOG_SILENT を定義すると何も出さない（試験用）。
+ */
 
 #if defined(EIF_USE_UT_LOG)
 #include "utility_log.h"

@@ -22,18 +22,18 @@
 #define CONNECTOR_PATCH_WAIT_SEC (5)
 /** @brief 同時に待てるPATCHの数。 */
 #define CONNECTOR_PATCH_WAITERS (4U)
-/** @brief PATCHの待ち合わせに使う要求元トークンの印。 */
+/** @brief PATCHの待ち合わせに使う要求元トークンの印（最上位ビット）。ジョブのトークンと区別する。 */
 #define CONNECTOR_TOKEN_PATCH_FLAG (UINT64_C(1) << 63)
 
-static EIF_ConnectorId s_id = 0U;
-static atomic_uint_fast64_t s_next_token = 1U;
+static EIF_ConnectorId s_id = 0U;               /**< EIFが払い出した自身のConnector ID */
+static atomic_uint_fast64_t s_next_token = 1U;  /**< 次に使う要求元トークン */
 
 /* ---------------------------------------------------------------- 対応表（接続先依存） */
 
 /** @brief APIサーバーのジョブ種別 ⇔ 公開要求ID。どの機種でも同じ。公開範囲は機種ごとの対応表で決まる。 */
 static const struct {
-    job_type_t job_type;
-    eif_request_id_t request_id;
+    job_type_t job_type;           /**< APIサーバーのジョブ種別 */
+    eif_request_id_t request_id;   /**< 公開要求ID */
 } k_jobs[] = {
     { JOB_TYPE_PRINT,                  EIF_REQ_PRINT },
     { JOB_TYPE_TEST_PRINT,             EIF_REQ_TEST_PRINT },
@@ -45,6 +45,12 @@ static const struct {
     { JOB_TYPE_CAP_PUMP_CHECK,         EIF_REQ_CAP_PUMP_CHECK },
 };
 
+/**
+ * @brief ジョブ種別 → 公開要求ID。
+ * @param[in]  job ジョブ種別
+ * @param[out] out 公開要求ID（見つかった場合だけ書く）
+ * @return 対応表にあれば true
+ */
 static bool job_to_request(job_type_t job, eif_request_id_t *out)
 {
     for (size_t i = 0U; i < sizeof(k_jobs) / sizeof(k_jobs[0]); i++) {
@@ -56,6 +62,12 @@ static bool job_to_request(job_type_t job, eif_request_id_t *out)
     return false;
 }
 
+/**
+ * @brief 公開要求ID → ジョブ種別。
+ * @param[in]  req 公開要求ID
+ * @param[out] out ジョブ種別（見つかった場合だけ書く）
+ * @return 対応表にあれば true
+ */
 static bool request_to_job(eif_request_id_t req, job_type_t *out)
 {
     for (size_t i = 0U; i < sizeof(k_jobs) / sizeof(k_jobs[0]); i++) {
@@ -67,7 +79,11 @@ static bool request_to_job(eif_request_id_t req, job_type_t *out)
     return false;
 }
 
-/** @brief EIF_Result → uc_result_t（詳細設計書 9.4）。 */
+/**
+ * @brief EIF_Result → uc_result_t（詳細設計書 9.4）。
+ * @param[in] r EIFの結果コード
+ * @return APIサーバーの結果コード
+ */
 static uc_result_t to_uc(EIF_Result r)
 {
     switch (r) {
@@ -91,17 +107,23 @@ static uc_result_t to_uc(EIF_Result r)
 
 /* ---------------------------------------------------------------- PATCHの待ち合わせ（PCL経由になった場合） */
 
+/** @brief PATCHの待ち合わせ1件。 */
 typedef struct {
-    bool used;
-    bool done;
-    uint64_t token;
-    EIF_RequestOutcome outcome;
+    bool used;                   /**< 使用中 */
+    bool done;                   /**< 完了callbackが届いた */
+    uint64_t token;              /**< 待っている要求元トークン */
+    EIF_RequestOutcome outcome;  /**< 届いた終端結果 */
 } waiter_t;
 
-static waiter_t s_waiters[CONNECTOR_PATCH_WAITERS];
-static pthread_mutex_t s_wait_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t s_wait_cond = PTHREAD_COND_INITIALIZER;
+static waiter_t s_waiters[CONNECTOR_PATCH_WAITERS];              /**< 待ち合わせ表 */
+static pthread_mutex_t s_wait_lock = PTHREAD_MUTEX_INITIALIZER;  /**< 待ち合わせ表の保護 */
+static pthread_cond_t s_wait_cond = PTHREAD_COND_INITIALIZER;    /**< 完了の知らせ */
 
+/**
+ * @brief 待ち合わせを1件確保する。
+ * @param[in] token 待つ要求元トークン
+ * @return 確保した待ち合わせ。満杯ならNULL
+ */
 static waiter_t *waiter_acquire(uint64_t token)
 {
     waiter_t *w = NULL;
@@ -119,6 +141,14 @@ static waiter_t *waiter_acquire(uint64_t token)
     return w;
 }
 
+/**
+ * @brief 完了を上限時間まで待ち、待ち合わせを解放する。
+ * @param[in,out] w waiter_acquire() で確保した待ち合わせ
+ * @retval UC_OK            正常完了
+ * @retval UC_ERR_INTERNAL  正常完了以外で終端
+ * @retval UC_ERR_TIMEOUT   上限時間（CONNECTOR_PATCH_WAIT_SEC）内に完了しなかった
+ * @note APIサーバーのblockingスレッド [C2] で待つ。
+ */
 static uc_result_t waiter_wait_and_release(waiter_t *w)
 {
     struct timespec until;
@@ -129,7 +159,7 @@ static uc_result_t waiter_wait_and_release(waiter_t *w)
     pthread_mutex_lock(&s_wait_lock);
     while (!w->done) {
         if (pthread_cond_timedwait(&s_wait_cond, &s_wait_lock, &until) != 0) {
-            break;
+            break; /* 上限時間 */
         }
     }
     if (w->done) {
@@ -140,6 +170,13 @@ static uc_result_t waiter_wait_and_release(waiter_t *w)
     return r;
 }
 
+/**
+ * @brief 待ち合わせに完了を知らせる。
+ * @param[in] token   完了した要求の要求元トークン
+ * @param[in] outcome 終端結果
+ * @return そのトークンを待っている待ち合わせがあれば true
+ * @note EIFの完了callback（PCLの要求処理context [C3]）から呼ばれる。
+ */
 static bool waiter_signal(uint64_t token, EIF_RequestOutcome outcome)
 {
     bool found = false;
@@ -159,6 +196,13 @@ static bool waiter_signal(uint64_t token, EIF_RequestOutcome outcome)
 
 /* ---------------------------------------------------------------- REST callback（APIサーバーのblockingスレッド） */
 
+/**
+ * @brief REST GET /network_settings。EIFの公開モデルをAPIサーバーの型へ詰め替える。
+ * @param[out] out APIサーバーの型
+ * @retval UC_OK 取得した
+ * @retval その他 EIF_GetInfo() の結果の変換結果
+ * @note APIサーバーのblockingスレッド [C2] から呼ばれる。すべて同期で完了する。
+ */
 static uc_result_t rest_get_network(network_settings_t *out)
 {
     eif_network_settings_t m;
@@ -181,6 +225,20 @@ static uc_result_t rest_get_network(network_settings_t *out)
     return UC_OK;
 }
 
+/**
+ * @brief REST PATCH /network_settings。APIサーバーの型をEIFのパッチモデルへ詰め替えて更新する。
+ *
+ * EIF_PatchSetting() が EIF_OK（REFへ直接）ならその場で応答する。
+ * EIF_ACCEPTED（PCL経由）なら、RESTは同期応答のため、完了callbackを上限時間まで待つ。
+ *
+ * @param[in] in APIサーバーのパッチ
+ * @retval UC_OK                 反映した
+ * @retval UC_ERR_INVALID_PARAM  in がNULL、MACアドレスの変更、値が不正
+ * @retval UC_ERR_BUSY           待ち合わせが満杯
+ * @retval UC_ERR_TIMEOUT        PCL経由で上限時間内に完了しなかった
+ * @retval その他                EIF_PatchSetting() の結果の変換結果
+ * @note APIサーバーのblockingスレッド [C2] から呼ばれる。
+ */
 static uc_result_t rest_patch_network(const network_settings_patch_t *in)
 {
     eif_network_settings_patch_t p;
@@ -207,7 +265,7 @@ static uc_result_t rest_patch_network(const network_settings_patch_t *in)
     (void)snprintf(p.hostname, sizeof(p.hostname), "%s", in->hostname);
 
     const uint64_t token = CONNECTOR_TOKEN_PATCH_FLAG | atomic_fetch_add(&s_next_token, 1U);
-    waiter_t *w = waiter_acquire(token); /* PCL経由になった場合に備え、先に待ち合わせを用意する */
+    waiter_t *w = waiter_acquire(token); /* PCL経由になった場合に備え、先に待ち合わせを用意する（先着完了に備える） */
     if (w == NULL) {
         return UC_ERR_BUSY;
     }
@@ -215,12 +273,26 @@ static uc_result_t rest_patch_network(const network_settings_patch_t *in)
     if (r == EIF_ACCEPTED) {
         return waiter_wait_and_release(w); /* RESTは同期応答のため上限時間まで待つ */
     }
+    /* 同期で終わった（または失敗した）ので待ち合わせは不要 */
     pthread_mutex_lock(&s_wait_lock);
     w->used = false;
     pthread_mutex_unlock(&s_wait_lock);
     return to_uc(r);
 }
 
+/**
+ * @brief REST POST /jobs。ジョブ種別を公開要求IDへ変換してEIFへ要求し、要求ハンドルを job_id として返す。
+ *
+ * 受付だけで即時に応答する（HTTP 202）。結果は on_request_completed() でWebSocketへ送る。
+ *
+ * @param[in]  in  ジョブ作成要求
+ * @param[out] out 受付結果（job_id ＝ 要求ハンドル）
+ * @retval UC_OK                   受け付けた
+ * @retval UC_ERR_INVALID_PARAM    in・out がNULL
+ * @retval UC_ERR_NOT_IMPLEMENTED  対応表に無いジョブ種別
+ * @retval その他                  EIF_SubmitRequest() の結果の変換結果
+ * @note APIサーバーのblockingスレッド [C2] から呼ばれる。
+ */
 static uc_result_t rest_jobs_create(const job_create_request_t *in, accepted_job_t *out)
 {
     eif_request_id_t req;
@@ -243,6 +315,18 @@ static uc_result_t rest_jobs_create(const job_create_request_t *in, accepted_job
 
 /* ---------------------------------------------------------------- EIFからのcallback */
 
+/**
+ * @brief EIFの完了callback。PATCHの待ち合わせへ渡すか、ジョブの結果をWebSocketへ送る。
+ *
+ * @param[in] handle       要求ハンドル（＝ job_id）
+ * @param[in] request_id   公開要求ID
+ * @param[in] origin_token 要求時に渡したトークン（PATCHなら CONNECTOR_TOKEN_PATCH_FLAG 付き）
+ * @param[in] outcome      終端結果
+ * @param[in] user_context 使わない
+ *
+ * @note PCLの要求処理context [C3] から呼ばれる。rest_jobs_create() の戻りより先に呼ばれることがある。
+ *       server_ws_emit_event() はコピーして即復帰するため、長時間ブロックしない。
+ */
 static void on_request_completed(EIF_RequestHandle handle, eif_request_id_t request_id, uint64_t origin_token,
                                  EIF_RequestOutcome outcome, void *user_context)
 {
@@ -258,7 +342,7 @@ static void on_request_completed(EIF_RequestHandle handle, eif_request_id_t requ
     memset(&fields, 0, sizeof(fields));
     (void)snprintf(fields.job_id, sizeof(fields.job_id), "%llu", (unsigned long long)handle);
     if (!request_to_job(request_id, &fields.job_type)) {
-        return;
+        return; /* ジョブ以外（待ち合わせが時間切れになったPATCH等）は送らない */
     }
     switch (outcome) {
     case EIF_OUTCOME_COMPLETED:
@@ -279,6 +363,14 @@ static void on_request_completed(EIF_RequestHandle handle, eif_request_id_t requ
     (void)server_ws_emit_event(&ev); /* コピーして即復帰する */
 }
 
+/**
+ * @brief EIFのイベントcallback。異常の発生／解消をWebSocketのイベントへ変換して送る。
+ *
+ * @param[in] event        公開イベント（呼出し中だけ有効）
+ * @param[in] user_context 使わない
+ *
+ * @note REFの通知ワーカー [C4] から呼ばれる。受信フィルタ外のイベントは届かない。
+ */
 static void on_event(const EIF_Event *event, void *user_context)
 {
     ws_event_t ev;
@@ -305,6 +397,16 @@ static void on_event(const EIF_Event *event, void *user_context)
 
 /* ---------------------------------------------------------------- 入口 */
 
+/**
+ * @brief EIFへ自身を登録し、APIサーバーへRESTのcallbackを登録する。
+ *
+ * 受信フィルタは異常の発生／解消（EIF_EVT_ERROR_RAISED／RESOLVED）。
+ *
+ * @retval true  成功
+ * @retval false EIFへの登録、またはAPIサーバーへの登録に失敗
+ *
+ * @note 起動処理のスレッド [C1] から、EIF_Start() より前に呼ぶ。
+ */
 bool EifApiServerConnector_Setup(void)
 {
     static const eif_event_id_t filter[] = { EIF_EVT_ERROR_RAISED, EIF_EVT_ERROR_RESOLVED };
@@ -318,9 +420,11 @@ bool EifApiServerConnector_Setup(void)
     };
     server_rest_callbacks_t cbs;
 
+    /* ① EIFへ：完了・イベントを受け取る関数を渡す */
     if (EIF_RegisterConnector(&desc, &s_id) != EIF_OK) {
         return false;
     }
+    /* ② APIサーバーへ：REST要求を受け取る関数を渡す */
     memset(&cbs, 0, sizeof(cbs));
     cbs.network_settings.get = rest_get_network;
     cbs.network_settings.patch = rest_patch_network;

@@ -1,0 +1,70 @@
+{
+  "title": "EIF コード構成",
+  "root": "03.EIF設計/実装/externalInterfaceLayer",
+  "exclude": ["test/", "setup/Skeleton/", "build/"],
+  "components": [
+    {"key": "inc", "name": "公開ヘッダー", "sub": "include/", "prefix": ["include/"], "color": ["#EDE9FE", "#7C3AED"]},
+    {"key": "con", "name": "Connector", "sub": "connectors/", "prefix": ["connectors/"], "color": ["#DBEAFE", "#2563EB"]},
+    {"key": "frm", "name": "Frame", "sub": "frame/", "prefix": ["frame/"], "color": ["#F0FDF4", "#16A34A"]},
+    {"key": "acc", "name": "Accessor", "sub": "accessors/", "prefix": ["accessors/"], "color": ["#FFF7ED", "#EA580C"]},
+    {"key": "set", "name": "機種セットアップ", "sub": "setup/", "prefix": ["setup/"], "color": ["#F8FAFC", "#475569"]}
+  ],
+  "externals": [
+    {"key": "ext", "name": "外部コンポーネント（APIサーバー）", "prefix": ["server_"], "color": ["#F1F5F9", "#64748B"]},
+    {"key": "inn", "name": "PCL／REF（RIM）", "prefix": ["RIM_", "ExternalRequestIngress"], "color": ["#FEF3C7", "#B45309"]},
+    {"key": "main", "name": "起動処理", "prefix": [], "color": ["#F8FAFC", "#475569"]}
+  ],
+  "lane_order": ["main", "ext", "con", "inc", "frm", "set", "acc", "inn"],
+  "entry_header": "include/eif_api.h",
+  "contexts": {
+    "C1": "起動処理のスレッド",
+    "C2": "Connectorのスレッド",
+    "C3": "PCLの要求処理context",
+    "C4": "REFの通知ワーカー"
+  },
+  "async_contexts": ["C3", "C4"],
+  "receiver_types": {
+    "control": "EIF_ProductControlIf",
+    "info": "EIF_SystemInfoIf",
+    "setting": "EIF_SettingStoreIf",
+    "desc": "EIF_ConnectorDesc"
+  },
+  "indirect_calls": {
+    "pcl_accessor_on_completed": ["eif_tracker_on_done"],
+    "on_ref_notified": ["on_info_changed"],
+    "read_public": ["mp_network_to_public", "mp_alarm_list_to_public"],
+    "setting_store": ["mp_network_from_public"],
+    "EIF_PatchSetting": ["merge_network"]
+  },
+  "ignore_functions": ["eif_mutex_lock", "eif_mutex_unlock"],
+  "external_callers": {
+    "rest_get_network": "ext",
+    "rest_patch_network": "ext",
+    "rest_jobs_create": "ext",
+    "pcl_accessor_on_completed": "inn",
+    "on_ref_notified": "inn"
+  },
+  "conversion_function_patterns": ["^map_", "_map_", "^to_uc$", "_to_public$", "_from_public$", "^merge_", "_to_request$", "^request_to_", "^job_to_", "^fault_to_", "^ipv4_to_", "^string_to_"],
+  "flows": [
+    {"name": "初期化：EIF_Setup → EIF_Start", "from": "main", "start": ["EIF_Setup", "EIF_Start"]},
+    {"name": "Connector登録：EifApiServerConnector_Setup", "from": "main", "start": ["EifApiServerConnector_Setup"]},
+    {"name": "要求：REST POST /jobs → EIF_SubmitRequest", "from": "ext", "start": ["rest_jobs_create"]},
+    {"name": "完了通知：PCLの完了 → on_request_completed", "from": "inn", "start": ["pcl_accessor_on_completed"]},
+    {"name": "情報取得：REST GET → EIF_GetInfo", "from": "ext", "start": ["rest_get_network"]},
+    {"name": "設定変更：REST PATCH → EIF_PatchSetting", "from": "ext", "start": ["rest_patch_network"]},
+    {"name": "情報変化の通知：REFの通知 → on_event", "from": "inn", "start": ["on_ref_notified"]},
+    {"name": "結果照会：EIF_GetRequestResult", "from": "con", "start": ["EIF_GetRequestResult"]},
+    {"name": "取消：EIF_CancelRequest", "from": "con", "start": ["EIF_CancelRequest"]}
+  ],
+  "dependency_rules": {
+    "inc": {"allow_dirs": ["include/"], "allow_external": []},
+    "con": {"allow_dirs": ["include/", "connectors/"], "allow_external": ["server_api.h"]},
+    "frm": {"allow_dirs": ["include/", "frame/"], "allow_external": ["utility_log.h"]},
+    "acc": {"allow_dirs": ["include/", "frame/include/", "accessors/"], "allow_external": ["product_control_api.h", "rim_api_common.h", "rim_api.h"]},
+    "set": {"allow_dirs": ["include/", "frame/include/", "accessors/pcl/pcl_accessor.h", "accessors/ref/ref_accessor.h"], "allow_external": []}
+  },
+  "dependency_notes": {
+    "rim_api.h": "REFの製品別ヘッダーは accessors/ref/models/ だけが使ってよい"
+  },
+  "model_only_external": {"rim_api.h": "accessors/ref/models/"}
+}

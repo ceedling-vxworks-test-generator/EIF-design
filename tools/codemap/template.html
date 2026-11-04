@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root {
+  --bg: #ffffff; --fg: #0f172a; --muted: #64748b; --line: #cbd5e1; --panel: #f8fafc;
+  --type-f: #e0f2fe; --type-s: #0369a1; --conv-f: #ffedd5; --conv-s: #c2410c;
+  --def-f: #f3e8ff; --def-s: #7e22ce; --run-f: #dcfce7; --run-s: #15803d;
+  --impl-f: #f1f5f9; --impl-s: #475569; --guard-f: #fee2e2; --guard-s: #dc2626;
+  --sel: #f59e0b; --caller: #2563eb; --callee: #ea580c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "Yu Gothic UI", "Meiryo", sans-serif; font-size: 13px; color: var(--fg); background: var(--bg); }
+header { position: sticky; top: 0; z-index: 10; background: #0f172a; color: #fff; display: flex; align-items: center; gap: 16px; padding: 8px 16px; }
+header h1 { font-size: 16px; margin: 0; }
+nav button { background: transparent; color: #cbd5e1; border: 1px solid #334155; border-radius: 6px; padding: 5px 12px; margin-right: 6px; cursor: pointer; font-size: 13px; }
+nav button.on { background: #f8fafc; color: #0f172a; }
+main { padding: 12px 16px; }
+.view { display: none; } .view.on { display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin: 4px 0 12px; color: var(--muted); font-size: 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+/* 構成マップ */
+#mapwrap { position: relative; }
+#mapgrid { display: grid; gap: 12px; align-items: start; }
+#mapsvg { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+.col { border: 2px dashed; border-radius: 6px; padding: 8px; min-height: 200px; }
+.col h2 { font-size: 14px; margin: 0 0 2px; } .col .sub { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+.sect { font-size: 11px; color: var(--muted); margin: 10px 0 4px; font-weight: bold; }
+.file { background: #ffffffcc; border: 1px solid var(--line); border-radius: 6px; padding: 6px; margin-bottom: 8px; }
+.file .fn-file { font-size: 11px; font-weight: bold; color: #334155; margin-bottom: 4px; word-break: break-all; }
+.chip { display: block; width: 100%; text-align: left; border: 1.5px solid #94a3b8; background: #fff; border-radius: 5px; padding: 3px 6px; margin: 3px 0; cursor: pointer; font-size: 12px; font-family: Consolas, monospace; }
+.chip.entry { border-color: #7c3aed; font-weight: bold; background: #faf5ff; }
+.chip.conv { border-color: var(--conv-s); background: var(--conv-f); }
+.chip.static { color: #475569; }
+.chip .b { font-family: "Yu Gothic UI", sans-serif; font-size: 10px; margin-left: 4px; padding: 0 4px; border-radius: 3px; }
+.b.g { background: var(--guard-f); color: var(--guard-s); } .b.c { background: #e2e8f0; color: #334155; } .b.e { background: #ede9fe; color: #6d28d9; }
+.chip.sel { outline: 3px solid var(--sel); } .chip.caller { border-color: var(--caller); background: #dbeafe; } .chip.callee { border-color: var(--callee); background: #ffedd5; }
+.chip.dim { opacity: .35; }
+.cyl { position: relative; border: 1.5px solid; border-radius: 50% / 9px; padding: 9px 8px 6px; margin: 6px 0; font-size: 11px; cursor: default; }
+.cyl b { font-family: Consolas, monospace; font-size: 11px; }
+.cyl .k { font-size: 10px; color: var(--muted); }
+.cyl.type { background: var(--type-f); border-color: var(--type-s); } .cyl.conv { background: var(--conv-f); border-color: var(--conv-s); }
+.cyl.def { background: var(--def-f); border-color: var(--def-s); } .cyl.run { background: var(--run-f); border-color: var(--run-s); }
+.cyl.impl { background: var(--impl-f); border-color: var(--impl-s); }
+.cyl.used { outline: 3px solid var(--sel); }
+.hex { display: inline-block; background: var(--guard-f); border: 1.5px solid var(--guard-s); padding: 2px 10px; clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 8px 100%, 0 50%); font-size: 11px; }
+#detail { position: fixed; right: 12px; top: 56px; width: 420px; max-height: calc(100vh - 70px); overflow: auto; background: #fff; border: 1px solid #94a3b8; border-radius: 8px; box-shadow: 0 6px 24px #0f172a33; padding: 12px; display: none; z-index: 20; }
+#detail h3 { margin: 0 0 4px; font-family: Consolas, monospace; font-size: 15px; }
+#detail .close { float: right; cursor: pointer; border: none; background: #e2e8f0; border-radius: 4px; }
+#detail ul { margin: 4px 0 8px; padding-left: 18px; } #detail li { margin: 2px 0; }
+#detail a { color: #1d4ed8; cursor: pointer; text-decoration: underline; font-family: Consolas, monospace; }
+.meta { color: var(--muted); font-size: 12px; }
+.guard-item { margin: 4px 0; } .guard-item code { background: #fef2f2; }
+/* APIフロー */
+#flowbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+#flowsel { font-size: 13px; padding: 4px; min-width: 420px; }
+#flowsvg text { font-family: "Yu Gothic UI", "Meiryo", sans-serif; }
+/* 表 */
+table.t { border-collapse: collapse; width: 100%; margin-bottom: 18px; }
+table.t th, table.t td { border: 1px solid var(--line); padding: 4px 6px; text-align: left; vertical-align: top; font-size: 12px; }
+table.t th { background: #e2e8f0; position: sticky; top: 44px; }
+td.ng { color: #b91c1c; font-weight: bold; } td.ok { color: #15803d; }
+.mono { font-family: Consolas, monospace; }
+h3.sec { font-size: 14px; margin: 14px 0 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="ttl"></h1>
+  <nav>
+    <button data-v="map">構成マップ</button>
+    <button data-v="flow">APIフロー</button>
+    <button data-v="deps">依存チェック</button>
+    <button data-v="list">一覧</button>
+  </nav>
+  <span id="stat" style="margin-left:auto;font-size:12px;color:#cbd5e1"></span>
+</header>
+<main>
+  <section class="view" id="v-map">
+    <div class="legend">
+      <span><span class="chip entry" style="display:inline-block;width:auto">公開API</span></span>
+      <span><span class="chip" style="display:inline-block;width:auto">関数</span></span>
+      <span><span class="chip conv" style="display:inline-block;width:auto">変換関数</span></span>
+      <span><span class="b g">◆2</span>ガードの数</span>
+      <span><span class="b c">C2</span>実行コンテキスト</span>
+      <span><span class="cyl type" style="display:inline-block;margin:0">型定義</span></span>
+      <span><span class="cyl conv" style="display:inline-block;margin:0">変換表</span></span>
+      <span><span class="cyl def" style="display:inline-block;margin:0">定義表</span></span>
+      <span><span class="cyl run" style="display:inline-block;margin:0">実行時データ</span></span>
+      <span><span class="cyl impl" style="display:inline-block;margin:0">IFの実装表</span></span>
+      <span>関数をクリック：<b style="color:var(--caller)">呼ぶ側</b>／<b style="color:var(--callee)">呼ばれる側</b>を強調</span>
+    </div>
+    <div id="mapwrap"><div id="mapgrid"></div><svg id="mapsvg"></svg></div>
+  </section>
+  <section class="view" id="v-flow">
+    <div id="flowbar"><label>シナリオ：</label><select id="flowsel"></select>
+      <span class="meta">関数を縦長のブロック、呼出しを番号付きの矢印で表示（同じ部品の中の補助関数は展開して省略）</span></div>
+    <div class="legend">
+      <span><svg width="40" height="10"><line x1="0" y1="5" x2="34" y2="5" stroke="#1f2937" stroke-width="1.5" marker-end="url(#a1)"/></svg>同期呼出し</span>
+      <span><svg width="40" height="10"><line x1="0" y1="5" x2="34" y2="5" stroke="#475569" stroke-dasharray="4 3"/></svg>戻り</span>
+      <span><svg width="40" height="10"><line x1="0" y1="5" x2="34" y2="5" stroke="#2563eb" stroke-width="1.8" stroke-dasharray="6 3"/></svg>非同期（別のcontextから呼ばれる）</span>
+      <span class="hex">ガード（条件 → 戻り値）</span>
+      <span><span class="cyl conv" style="display:inline-block;margin:0">変換表・変換関数</span></span>
+      <span><span class="cyl run" style="display:inline-block;margin:0">実行時データ</span></span>
+    </div>
+    <div id="flowbox" style="overflow:auto"><svg id="flowsvg"></svg></div>
+  </section>
+  <section class="view" id="v-deps"></section>
+  <section class="view" id="v-list"></section>
+</main>
+<div id="detail"></div>
+<script>
+const DATA = /*__DATA__*/null;
+const F = DATA.functions;
+const COMP = {}; DATA.components.forEach(c => COMP[c.key] = c); DATA.externals.forEach(c => COMP[c.key] = c);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const CAT = {conv: "変換表", def: "定義表", run: "実行時データ", impl: "IFの実装表", type: "型定義"};
+
+document.getElementById("ttl").textContent = DATA.title;
+const nG = Object.values(F).reduce((a, f) => a + f.guards.length, 0);
+const nNG = DATA.deps.filter(d => !d.ok).length;
+document.getElementById("stat").textContent =
+  `関数 ${Object.keys(F).length}／型 ${DATA.types.length}／表 ${DATA.tables.length}／ガード ${nG}／依存規則の違反 ${nNG}`;
+
+// ---------------------------------------------------------------- 画面の切替（#map／#flow=番号／#deps／#list）
+function show(v) {
+  document.querySelectorAll(".view").forEach(e => e.classList.toggle("on", e.id === "v-" + v));
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
+  if (v === "map") drawLinks();
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => { location.hash = b.dataset.v; });
+window.addEventListener("hashchange", route);
+function route() {
+  const h = location.hash.slice(1) || "map";
+  const [v, arg] = h.split("=");
+  show(v);
+  if (v === "flow" && arg !== undefined) { document.getElementById("flowsel").value = arg; drawFlow(); }
+  if (v === "map" && arg) select(decodeURIComponent(arg));
+}
+
+// ---------------------------------------------------------------- 構成マップ
+const mapComps = DATA.lane_order.filter(k => DATA.components.some(c => c.key === k));
+const extUsed = {};
+Object.values(F).forEach(f => f.calls.forEach(c => { if (c.ext) (extUsed[c.ext] = extUsed[c.ext] || new Set()).add(c.to.slice(4)); }));
+const mapCols = [...(extUsed.ext ? ["ext"] : []), ...mapComps, ...(extUsed.inn ? ["inn"] : [])];
+
+function chip(f) {
+  const cls = ["chip", f.entry ? "entry" : "", f.conv ? "conv" : "", f.static ? "static" : ""].join(" ");
+  let b = "";
+  if (f.guards.length) b += `<span class="b g">◆${f.guards.length}</span>`;
+  if (f.ctx) b += `<span class="b c">${f.ctx}</span>`;
+  if (f.entry) b += `<span class="b e">公開API</span>`;
+  return `<button class="${cls}" data-f="${esc(f.id)}" title="${esc(f.brief)}">${esc(f.name)}${b}</button>`;
+}
+function cyl(kind, name, k, title) {
+  return `<div class="cyl ${kind}" data-t="${esc(name)}" title="${esc(title || "")}"><b>${esc(name)}</b><div class="k">${esc(k)}</div></div>`;
+}
+function buildMap() {
+  const g = document.getElementById("mapgrid");
+  g.style.gridTemplateColumns = mapCols.map(k => (k === "ext" || k === "inn") ? "minmax(170px,0.7fr)" : "minmax(240px,1fr)").join(" ");
+  g.innerHTML = mapCols.map(k => {
+    const c = COMP[k];
+    let h = `<div class="col" style="background:${c.color[0]};border-color:${c.color[1]}"><h2>${esc(c.name)}</h2><div class="sub">${esc(c.sub || "外部（解析の対象外）")}</div>`;
+    if (k === "ext" || k === "inn") {
+      h += `<div class="sect">呼ばれる関数</div>` + [...extUsed[k]].sort().map(n => `<button class="chip" data-f="ext:${esc(n)}">${esc(n)}</button>`).join("");
+      return h + "</div>";
+    }
+    const files = DATA.files.filter(f => f.comp === k);
+    const fns = Object.values(F).filter(f => f.comp === k);
+    h += `<div class="sect">関数（ファイルごと）</div>`;
+    files.forEach(fl => {
+      const list = fns.filter(f => f.file === fl.file).sort((a, b) => a.line - b.line);
+      if (!list.length) return;
+      h += `<div class="file"><div class="fn-file" title="${esc(fl.brief)}">${esc(fl.file)}</div>${list.map(chip).join("")}</div>`;
+    });
+    const tbs = DATA.tables.filter(t => t.comp === k);
+    if (tbs.length) h += `<div class="sect">表</div>` + tbs.map(t => cyl(t.category, t.name, `${CAT[t.category]}（${t.type}）`, `${t.brief}\n${t.file}:${t.line}`)).join("");
+    const tys = DATA.types.filter(t => t.comp === k);
+    if (tys.length) h += `<div class="sect">型定義</div>` + tys.map(t => cyl("type", t.name, `${t.kind}・${t.file.split("/").pop()}`, `${t.brief}\n${t.file}:${t.line}`)).join("");
+    return h + "</div>";
+  }).join("");
+  g.querySelectorAll(".chip").forEach(b => b.onclick = () => select(b.dataset.f));
+}
+let selected = null;
+function select(fid) {
+  selected = fid;
+  const f = F[fid];
+  const callees = new Set(f ? f.calls.map(c => c.to) : []);
+  const callers = new Set(f ? f.callers : Object.values(F).filter(x => x.calls.some(c => c.to === fid)).map(x => x.id));
+  document.querySelectorAll("#mapgrid .chip").forEach(b => {
+    const id = b.dataset.f;
+    b.classList.toggle("sel", id === fid);
+    b.classList.toggle("caller", callers.has(id));
+    b.classList.toggle("callee", callees.has(id));
+    b.classList.toggle("dim", id !== fid && !callers.has(id) && !callees.has(id));
+  });
+  const used = new Set(f ? f.tables : []);
+  document.querySelectorAll("#mapgrid .cyl").forEach(c => c.classList.toggle("used", used.has(c.dataset.t)));
+  drawLinks();
+  showDetail(fid);
+}
+function drawLinks() {
+  const svg = document.getElementById("mapsvg"), wrap = document.getElementById("mapwrap");
+  const R = wrap.getBoundingClientRect();
+  svg.setAttribute("width", wrap.scrollWidth); svg.setAttribute("height", wrap.scrollHeight);
+  svg.innerHTML = `<defs><marker id="m1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#ea580c"/></marker>
+    <marker id="m2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="#2563eb"/></marker></defs>`;
+  if (!selected) return;
+  const el = id => document.querySelector(`#mapgrid .chip[data-f="${CSS.escape(id)}"]`);
+  const me = el(selected); if (!me) return;
+  const pt = (e, side) => { const r = e.getBoundingClientRect(); return [(side === "r" ? r.right : r.left) - R.left, r.top + r.height / 2 - R.top]; };
+  const line = (a, b, color, mk) => {
+    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    const fwd = rb.left >= ra.left;
+    const [x1, y1] = pt(a, fwd ? "r" : "l"), [x2, y2] = pt(b, fwd ? "l" : "r");
+    const dx = Math.max(40, Math.abs(x2 - x1) / 2) * (fwd ? 1 : -1);
+    svg.insertAdjacentHTML("beforeend", `<path d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}" fill="none" stroke="${color}" stroke-width="1.6" marker-end="url(#${mk})" opacity=".85"/>`);
+  };
+  const f = F[selected];
+  if (f) f.calls.forEach(c => { const t = el(c.to); if (t && t !== me) line(me, t, "#ea580c", "m1"); });
+  (f ? f.callers : Object.values(F).filter(x => x.calls.some(c => c.to === selected)).map(x => x.id))
+    .forEach(id => { const t = el(id); if (t && t !== me) line(t, me, "#2563eb", "m2"); });
+}
+const link = id => `<a onclick="select('${esc(id).replace(/'/g, "\\'")}')">${esc(F[id] ? F[id].name : id.replace(/^ext:/, ""))}</a>`;
+function showDetail(fid) {
+  const d = document.getElementById("detail");
+  const f = F[fid];
+  if (!f) {
+    const callers = Object.values(F).filter(x => x.calls.some(c => c.to === fid)).map(x => x.id);
+    d.innerHTML = `<button class="close" onclick="closeDetail()">×</button><h3>${esc(fid.slice(4))}</h3><div class="meta">外部の関数（解析の対象外）</div><b>呼ぶ側</b><ul>${callers.map(c => `<li>${link(c)}</li>`).join("")}</ul>`;
+    d.style.display = "block"; return;
+  }
+  const ctx = f.ctx ? `${f.ctx}：${DATA.contexts[f.ctx] || ""}` : "（記載なし）";
+  d.innerHTML = `<button class="close" onclick="closeDetail()">×</button>
+    <h3>${esc(f.name)}</h3><div class="meta">${esc(COMP[f.comp].name)}／${esc(f.file)}:${f.line}${f.static ? "／static" : ""}${f.entry ? "／公開API" : ""}</div>
+    <p>${esc(f.brief)}</p>${f.notes ? `<p class="meta">${esc(f.notes)}</p>` : ""}
+    <div class="meta">実行コンテキスト：${esc(ctx)}</div>
+    <b>呼ぶ側（${f.callers.length}）</b><ul>${f.callers.map(c => `<li>${link(c)}</li>`).join("") || "<li class='meta'>なし（入口または外部から呼ばれる）</li>"}</ul>
+    <b>呼ぶ関数（${f.calls.length}）</b><ul>${f.calls.map(c => `<li>${link(c.to)}${c.via ? ` <span class="meta">（->${esc(c.via)} 経由）</span>` : ""}${c.kind === "indirect" ? ' <span class="meta">（設定で補った間接呼出し）</span>' : ""} <span class="meta">:${c.line}</span></li>`).join("") || "<li class='meta'>なし</li>"}</ul>
+    <b>ガード（${f.guards.length}）</b>${f.guards.map(g => `<div class="guard-item"><span class="hex">if (${esc(g.cond)}) → ${esc(g.ret)}</span> <span class="meta">:${g.line}</span>${g.comment ? `<div class="meta">${esc(g.comment)}</div>` : ""}</div>`).join("") || "<div class='meta'>なし</div>"}
+    <b>参照している表</b><ul>${f.tables.map(t => `<li class="mono">${esc(t)}</li>`).join("") || "<li class='meta'>なし</li>"}</ul>
+    <a onclick="openFlowFor('${esc(f.id)}')">この関数から始まるフローを表示</a>`;
+  d.style.display = "block";
+}
+function closeDetail() {
+  document.getElementById("detail").style.display = "none"; selected = null;
+  document.querySelectorAll("#mapgrid .chip").forEach(b => b.classList.remove("sel", "caller", "callee", "dim"));
+  document.querySelectorAll("#mapgrid .cyl").forEach(c => c.classList.remove("used"));
+  drawLinks();
+}
+
+// ---------------------------------------------------------------- APIフロー
+const FLOWS = [...DATA.flows];
+Object.values(F).filter(f => f.entry).sort((a, b) => a.name.localeCompare(b.name))
+  .forEach(f => FLOWS.push({name: `公開API：${f.name}`, from: f.comp === "set" ? "main" : (f.name === "EIF_Setup" || f.name === "EIF_Start" || f.name === "EIF_RegisterConnector" ? "main" : "con"), start: [f.id]}));
+const sel = document.getElementById("flowsel");
+sel.innerHTML = FLOWS.map((f, i) => `<option value="${i}">${esc(f.name)}</option>`).join("");
+sel.onchange = () => { location.hash = "flow=" + sel.value; };
+function openFlowFor(fid) {
+  const f = F[fid];
+  FLOWS.push({name: `関数：${f.name}`, from: DATA.external_callers[f.name] || "main", start: [fid]});
+  sel.innerHTML = FLOWS.map((f, i) => `<option value="${i}">${esc(f.name)}</option>`).join("");
+  location.hash = "flow=" + (FLOWS.length - 1);
+}
+
+function buildFlow(flow) {
+  const boxes = [], ev = [];
+  const asyncCtx = new Set(DATA.async_contexts);
+  const newBox = (lane, title, sub) => { boxes.push({lane, title, sub, rows: []}); return boxes.length - 1; };
+  const root = newBox(flow.from, COMP[flow.from] ? COMP[flow.from].name : flow.from, "");
+  const seenByBox = {};
+  function visit(fid, box, depth, stack) {
+    const f = F[fid];
+    const seenT = seenByBox[box] = seenByBox[box] || new Set();
+    for (const e of f.events) {
+      if (e.t === "table") {
+        const t = DATA.tables.find(x => x.name === e.name);
+        if (!t || seenT.has(e.name) || t.category === "impl") continue;
+        seenT.add(e.name);
+        ev.push({k: "side", box, kind: t.category, title: t.name, body: CAT[t.category] + (t.brief ? "：" + t.brief : "")});
+      } else if (e.t === "guard") {
+        const g = f.guards[e.i];
+        ev.push({k: "guard", box, title: `if (${g.cond})`, body: `→ ${g.ret}${g.comment ? "（" + g.comment + "）" : ""}`});
+      } else if (e.t === "call") {
+        const c = f.calls[e.i];
+        if (c.ext) {
+          const b = newBox(c.ext, c.to.slice(4), "外部");
+          ev.push({k: "call", from: box, to: b, label: c.to.slice(4)});
+          ev.push({k: "ret", from: b, to: box, label: ""});
+          continue;
+        }
+        const t = F[c.to];
+        if (!t || stack.includes(c.to) || depth > 9) continue;
+        const isAsync = t.ctx && asyncCtx.has(t.ctx) && t.ctx !== f.ctx;
+        if (t.comp === f.comp && !isAsync) {
+          if (t.conv && !t.calls.length) {
+            ev.push({k: "side", box, kind: "conv", title: t.name + "()", body: "変換関数" + (t.brief ? "：" + t.brief : "")});
+          } else {
+            visit(c.to, box, depth + 1, [...stack, c.to]);   // 同じ部品の中は展開する
+          }
+          continue;
+        }
+        const b = newBox(t.comp, t.name + "()", t.file.split("/").pop() + (t.ctx ? "　[" + t.ctx + "]" : ""));
+        ev.push({k: isAsync ? "cb" : "call", from: box, to: b, label: (c.via ? c.via : t.name) + "()" + (c.kind === "indirect" ? "　※間接" : "")});
+        visit(c.to, b, depth + 1, [...stack, c.to]);
+        if (!isAsync) ev.push({k: "ret", from: b, to: box, label: ""});
+      }
+    }
+  }
+  flow.start.forEach(s => {
+    const id = F[s] ? s : Object.keys(F).find(k => F[k].name === s);
+    if (!id) return;
+    const t = F[id];
+    const b = newBox(t.comp, t.name + "()", t.file.split("/").pop() + (t.ctx ? "　[" + t.ctx + "]" : ""));
+    ev.push({k: "call", from: root, to: b, label: t.name + "()"});
+    visit(id, b, 0, [id]);
+    ev.push({k: "ret", from: b, to: root, label: ""});
+  });
+  return {boxes, ev};
+}
+
+function wrapText(s, n) {
+  const out = []; let cur = "";
+  for (const ch of String(s)) { cur += ch; if (cur.length >= n) { out.push(cur); cur = ""; } }
+  if (cur) out.push(cur);
+  return out.slice(0, 3);
+}
+function drawFlow() {
+  const flow = FLOWS[+sel.value || 0];
+  const {boxes, ev} = buildFlow(flow);
+  const used = DATA.lane_order.filter(k => boxes.some(b => b.lane === k));
+  const W = {}, X = {};
+  const MAINW = 200, SIDEW = 250, GAP = 70, ROWH = 46, TOP = 70;
+  let x = 10;
+  used.forEach(k => {
+    const hasSide = ev.some(e => (e.k === "side" || e.k === "guard") && boxes[e.box].lane === k);
+    W[k] = hasSide ? MAINW + SIDEW + 40 : MAINW + 30; X[k] = x; x += W[k] + GAP;
+  });
+  const width = x, rows = ev.length;
+  ev.forEach((e, i) => {
+    const touch = e.k === "side" || e.k === "guard" ? [e.box] : [e.from, e.to];
+    touch.forEach(b => boxes[b].rows.push(i));
+  });
+  const ry = i => TOP + 60 + i * ROWH + ROWH / 2;
+  const height = TOP + 60 + rows * ROWH + 60;
+  let s = `<defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0L10,5L0,10z" fill="#1f2937"/></marker>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0L10,5L0,10" fill="none" stroke="#475569"/></marker>
+    <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0L10,5L0,10z" fill="#2563eb"/></marker></defs>`;
+  s += `<text x="10" y="28" font-size="18" font-weight="bold">${esc(flow.name)}</text>`;
+  used.forEach(k => {
+    const c = COMP[k];
+    s += `<rect x="${X[k]}" y="${TOP}" width="${W[k]}" height="${height - TOP - 10}" fill="${c.color[0]}" stroke="${c.color[1]}" stroke-width="2" stroke-dasharray="6 4" rx="4"/>`;
+    s += `<text x="${X[k] + 8}" y="${TOP + 20}" font-size="14" font-weight="bold">${esc(c.name)}</text>`;
+    if (c.sub) s += `<text x="${X[k] + 8}" y="${TOP + 36}" font-size="11" fill="#64748b">${esc(c.sub)}</text>`;
+  });
+  const span = boxes.map(b => b.rows.length ? [Math.min(...b.rows), Math.max(...b.rows)] : null);
+  const geo = boxes.map((b, i) => {
+    if (!span[i]) return null;
+    const [lo, hi] = span[i];
+    let lvl = 0;
+    for (let j = 0; j < i; j++) {
+      if (span[j] && boxes[j].lane === b.lane && span[j][0] <= hi && lo <= span[j][1]) lvl++;
+    }
+    return {x: X[b.lane] + 12 + lvl * 16, y: ry(lo) - 40 + lvl * 4, w: MAINW - lvl * 16, h: ry(hi) - ry(lo) + 56 - lvl * 8};
+  });
+  boxes.forEach((b, i) => {
+    const g = geo[i]; if (!g) return;
+    const c = COMP[b.lane];
+    s += `<rect x="${g.x}" y="${g.y}" width="${g.w}" height="${g.h}" rx="6" fill="#fff" stroke="${c.color[1]}" stroke-width="2"/>`;
+    s += `<text x="${g.x + g.w / 2}" y="${g.y + 15}" font-size="12" font-weight="bold" text-anchor="middle" font-family="Consolas,monospace">${esc(b.title)}</text>`;
+    if (b.sub) s += `<text x="${g.x + g.w / 2}" y="${g.y + 28}" font-size="10" fill="#64748b" text-anchor="middle">${esc(b.sub)}</text>`;
+  });
+  let num = 0;
+  ev.forEach((e, i) => {
+    const y = ry(i);
+    if (e.k === "side" || e.k === "guard") {
+      const g = geo[e.box];
+      const sx = g.x + g.w + 24, sw = SIDEW;
+      s += `<line x1="${g.x + g.w}" y1="${y}" x2="${sx}" y2="${y}" stroke="${e.k === "guard" ? "#dc2626" : "#64748b"}" stroke-dasharray="3 3"/>`;
+      const tl = e.title.length > 36 ? e.title.slice(0, 35) + "…" : e.title;
+      const lines = [tl, ...wrapText(e.body, 30)].slice(0, 3);
+      if (e.k === "guard") {
+        s += `<polygon points="${sx + 10},${y - 20} ${sx + sw - 10},${y - 20} ${sx + sw},${y} ${sx + sw - 10},${y + 20} ${sx + 10},${y + 20} ${sx},${y}" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>`;
+      } else {
+        const col = {conv: ["#ffedd5", "#c2410c"], def: ["#f3e8ff", "#7e22ce"], run: ["#dcfce7", "#15803d"]}[e.kind] || ["#e0f2fe", "#0369a1"];
+        s += `<path d="M${sx},${y - 14} a${sw / 2},6 0 0,1 ${sw},0 v30 a${sw / 2},6 0 0,1 ${-sw},0 z" fill="${col[0]}" stroke="${col[1]}" stroke-width="1.5"/>`;
+        s += `<path d="M${sx},${y - 14} a${sw / 2},6 0 0,0 ${sw},0" fill="none" stroke="${col[1]}" stroke-width="1.2"/>`;
+      }
+      lines.forEach((t, j) => {
+        s += `<text x="${sx + sw / 2}" y="${y - 7 + j * 12 - (lines.length - 2) * 5}" font-size="${j ? 10 : 11}" ${j ? "" : 'font-weight="bold"'} text-anchor="middle" font-family="${j ? "" : "Consolas,monospace"}"><title>${esc(e.title + " " + e.body)}</title>${esc(t)}</text>`;
+      });
+      return;
+    }
+    const a = geo[e.from], b = geo[e.to];
+    if (!a || !b) return;
+    const right = b.x > a.x;
+    const x1 = right ? a.x + a.w : a.x, x2 = right ? b.x : b.x + b.w;
+    const st = e.k === "call" ? 'stroke="#1f2937" stroke-width="1.5" marker-end="url(#a1)"'
+      : e.k === "ret" ? 'stroke="#475569" stroke-dasharray="4 3" marker-end="url(#a2)"'
+      : 'stroke="#2563eb" stroke-width="1.8" stroke-dasharray="6 3" marker-end="url(#a3)"';
+    s += `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" ${st}/>`;
+    if (e.k !== "ret") {
+      num++;
+      s += `<text x="${(x1 + x2) / 2}" y="${y - 5}" font-size="11" text-anchor="middle" fill="${e.k === "cb" ? "#1d4ed8" : "#0f172a"}" font-family="Consolas,monospace">(${num}) ${esc(e.label)}</text>`;
+    }
+  });
+  const svg = document.getElementById("flowsvg");
+  svg.setAttribute("width", width); svg.setAttribute("height", height);
+  svg.innerHTML = s;
+}
+
+// ---------------------------------------------------------------- 依存チェック
+function buildDeps() {
+  const rows = DATA.deps.filter(d => !d.external || true);
+  const comps = DATA.components.map(c => c.key);
+  const mat = {};
+  rows.forEach(d => { const k = d.fcomp + ">" + (d.external ? "外部" : d.tcomp); mat[k] = mat[k] || {ok: 0, ng: 0}; mat[k][d.ok ? "ok" : "ng"]++; });
+  const cols = [...comps, "外部"];
+  let h = `<h3 class="sec">部品の間のinclude（行：参照する側、列：参照される側。数字＝include の数、赤＝規則違反）</h3><table class="t" style="width:auto"><tr><th></th>${cols.map(c => `<th>${esc(COMP[c] ? COMP[c].name : c)}</th>`).join("")}</tr>`;
+  comps.forEach(r => {
+    h += `<tr><th>${esc(COMP[r].name)}</th>` + cols.map(c => {
+      const m = mat[r + ">" + c]; if (!m) return "<td></td>";
+      return `<td class="${m.ng ? "ng" : "ok"}">${m.ok + m.ng}${m.ng ? `（違反 ${m.ng}）` : ""}</td>`;
+    }).join("") + "</tr>";
+  });
+  h += `</table><h3 class="sec">#include の一覧（システムヘッダーを除く）</h3><table class="t"><tr><th>判定</th><th>参照する側</th><th>参照されるもの</th><th>理由</th></tr>`;
+  rows.sort((a, b) => (a.ok - b.ok) || a.from.localeCompare(b.from)).forEach(d => {
+    h += `<tr><td class="${d.ok ? "ok" : "ng"}">${d.ok ? "OK" : "違反"}</td><td class="mono">${esc(d.from)}:${d.line}</td><td class="mono">${esc(d.to)}${d.external ? " <span class='meta'>（外部）</span>" : ""}</td><td>${esc(d.why)}</td></tr>`;
+  });
+  document.getElementById("v-deps").innerHTML = h + "</table>";
+}
+
+// ---------------------------------------------------------------- 一覧
+function buildList() {
+  let h = `<h3 class="sec">関数</h3><table class="t"><tr><th>関数</th><th>部品</th><th>場所</th><th>概要</th><th>context</th><th>ガード</th><th>呼ぶ関数</th></tr>`;
+  Object.values(F).sort((a, b) => a.comp.localeCompare(b.comp) || a.file.localeCompare(b.file) || a.line - b.line).forEach(f => {
+    h += `<tr><td class="mono"><a onclick="location.hash='map=${encodeURIComponent(f.id)}'">${esc(f.name)}</a>${f.entry ? " ★" : ""}</td><td>${esc(COMP[f.comp].name)}</td><td class="mono">${esc(f.file)}:${f.line}</td><td>${esc(f.brief)}</td><td>${esc(f.ctx)}</td><td>${f.guards.length || ""}</td><td class="mono">${f.calls.map(c => esc(F[c.to] ? F[c.to].name : c.to.slice(4))).join(", ")}</td></tr>`;
+  });
+  h += `</table><h3 class="sec">ガード</h3><table class="t"><tr><th>関数</th><th>条件</th><th>戻り値</th><th>場所</th></tr>`;
+  Object.values(F).forEach(f => f.guards.forEach(g => {
+    h += `<tr><td class="mono">${esc(f.name)}</td><td class="mono">${esc(g.cond)}</td><td class="mono">${esc(g.ret)}</td><td class="mono">${esc(f.file)}:${g.line}</td></tr>`;
+  }));
+  h += `</table><h3 class="sec">表</h3><table class="t"><tr><th>表</th><th>種類</th><th>型</th><th>部品</th><th>場所</th><th>概要</th><th>使う関数</th></tr>`;
+  DATA.tables.forEach(t => {
+    const users = Object.values(F).filter(f => f.tables.includes(t.name)).map(f => f.name);
+    h += `<tr><td class="mono">${esc(t.name)}</td><td>${CAT[t.category]}</td><td class="mono">${esc(t.type)}</td><td>${esc(COMP[t.comp].name)}</td><td class="mono">${esc(t.file)}:${t.line}</td><td>${esc(t.brief)}</td><td class="mono">${esc(users.join(", "))}</td></tr>`;
+  });
+  h += `</table><h3 class="sec">型定義</h3><table class="t"><tr><th>型</th><th>種類</th><th>部品</th><th>場所</th><th>概要</th></tr>`;
+  DATA.types.forEach(t => {
+    h += `<tr><td class="mono">${esc(t.name)}</td><td>${esc(t.kind)}</td><td>${esc(COMP[t.comp].name)}</td><td class="mono">${esc(t.file)}:${t.line}</td><td>${esc(t.brief)}</td></tr>`;
+  });
+  document.getElementById("v-list").innerHTML = h + "</table>";
+}
+
+buildMap(); buildDeps(); buildList(); drawFlow();
+window.addEventListener("resize", drawLinks);
+route();
+</script>
+</body>
+</html>

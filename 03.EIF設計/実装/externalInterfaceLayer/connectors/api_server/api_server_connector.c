@@ -400,7 +400,7 @@ static void on_event(const EIF_Event *event, void *user_context)
 /**
  * @brief EIFへ自身を登録し、APIサーバーへRESTのcallbackを登録する。
  *
- * 受信フィルタは異常の発生／解消（EIF_EVT_ERROR_RAISED／RESOLVED）。
+ * 購読要求は異常の発生／解消（EIF_EVT_ERROR_RAISED／RESOLVED）を変化時に受け取る（詳細設計書 3.1.4）。
  *
  * @retval true  成功
  * @retval false EIFへの登録、またはAPIサーバーへの登録に失敗
@@ -409,13 +409,17 @@ static void on_event(const EIF_Event *event, void *user_context)
  */
 bool EifApiServerConnector_Setup(void)
 {
-    static const eif_event_id_t filter[] = { EIF_EVT_ERROR_RAISED, EIF_EVT_ERROR_RESOLVED };
+    /* 購読要求定義（SubscriptionMapping）。登録時に固定されるため、受け取りうる通知をすべて並べる */
+    static const EIF_SubscriptionRequest k_subscriptions[] = {
+        { .id = EIF_EVT_ERROR_RAISED, .type = EIF_SUBSCRIBE_ON_CHANGE, .interval_ms = 0U },
+        { .id = EIF_EVT_ERROR_RESOLVED, .type = EIF_SUBSCRIBE_ON_CHANGE, .interval_ms = 0U },
+    };
     const EIF_ConnectorDesc desc = {
         .name = "api_server",
         .on_request_completed = on_request_completed,
         .on_event = on_event,
-        .event_filter = filter,
-        .event_filter_count = sizeof(filter) / sizeof(filter[0]),
+        .subscriptions = k_subscriptions,
+        .subscription_count = sizeof(k_subscriptions) / sizeof(k_subscriptions[0]),
         .user_context = NULL,
     };
     server_rest_callbacks_t cbs;

@@ -30,13 +30,12 @@ frame/
   request/                  要求受付・要求台帳と完了の振り分け（キー＝チケット）
   info/                     情報取得
   setting/                  設定定義表・公開モデルのマージ
-  notify/                   通知定義表・差分（アラーム一覧）・配信
-  cache/                    StateCache（前回値＝公開モデル）
+  notify/                   購読表（購読要求の集約）・公開イベントの配信（前回値・差分は持たない）
 connectors/
   api_server/               APIサーバー用Connector
 accessors/
   pcl/                      PCL Accessor（共通処理）＋ models/MiniPrinter（対応表）
-  ref/                      REF Accessor（取得・監視・書込みの共通処理）＋ models/MiniPrinter（対応表・変換）
+  ref/                      REF Accessor（取得・購読・書込みの共通処理）＋ models/MiniPrinter（対応表・変換）
 setup/
   MiniPrinter/              機種セットアップ（EIF_Setup）
   Skeleton/                 雛形（何も公開しないAccessor）
@@ -53,8 +52,8 @@ sh build_and_test.sh
 ```
 
 1. Frameを、PCL・REF・APIサーバーのヘッダーを1つも渡さずにコンパイル（依存規則の確認）
-2. Frameの単体試験（10件、スタブAccessor）
-3. Frame＋MiniPrinterのセットアップの結合試験（4件、PCL・RIMの関数はスタブ）
+2. Frameの単体試験（16件、スタブAccessor）
+3. Frame＋MiniPrinterのセットアップの結合試験（5件、PCL・RIMの関数はスタブ）
 4. Skeletonのセットアップ、APIサーバー用Connectorのコンパイル確認
 
 ※ CMakeLists.txt は作成のみで、この環境では動作を確認していない（CMakeが無いため）。
@@ -62,5 +61,6 @@ sh build_and_test.sh
 ## 初版の範囲と未実装
 
 - PCL経由の設定書込みAccessor（設定保存IFの別実装）は未実装（QA-01、QA-02）。Frame側の受け入れ（`EIF_ACCEPTED`の追跡）は実装・試験済み。
-- REF Accessorの通知用の作業領域は、REFの通知が直列に来る前提（QA-11）。
 - 印字データは対象外（QA-06）。
+- エラーの発生／解消の通知：RIMの異常1件ごとの通知は未提供のため、暫定で通知内容を `RIM_FaultInfo`（異常1件）とみなし、異常情報リスト（`RI_DATA_FAULT_INFO_LIST`）の購読で受ける（`accessors/ref/models/MiniPrinter/ref_maps.c`）。通知の名前と内容はRIMと調整して確定する。
+- 公開イベントごとの「指定できる通知方法」（`frame/connector/eif_connector_registry.c` の `k_event_defs`）は、エラーの発生／解消は変化時のみ（仕様設計書 9.3.2）。仕様に未記載の公開イベントは暫定値（インク残量の変化だけ定期も可）。

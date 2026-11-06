@@ -6,8 +6,8 @@
  *
  * 呼出し順序（起動処理のスレッドから）：
  * -# EIF_Setup()             … 機種セットアップがFrameへAccessorをつなぐ
- * -# EIF_RegisterConnector() … 各Connectorが自分のcallbackを登録する
- * -# EIF_Start()             … 情報変化の監視を登録し、要求の受付を開始する
+ * -# EIF_RegisterConnector() … 各Connectorが自分のcallbackと購読要求を登録する
+ * -# EIF_Start()             … 購読要求をまとめてREFへ購読し、要求の受付を開始する
  *
  * 以降、要求系API（EIF_SubmitRequest() 等）は任意のスレッドから同時に呼んでよい。
  * EIFは自前のタスクを持たず、すべて呼出し元のスレッドのままPCL・REFまで処理する。
@@ -85,7 +85,7 @@ typedef void (*EIF_RequestCompletedFn)(EIF_RequestHandle handle,
                                        void *user_context);
 
 /**
- * @brief イベントcallback。event_filterに含めた公開イベントだけが届く。
+ * @brief イベントcallback。購読要求（EIF_ConnectorDesc::subscriptions）で指定した公開イベントだけが届く。
  *
  * @param[in] event        公開イベント（呼出し中だけ有効）
  * @param[in] user_context 登録時の EIF_ConnectorDesc::user_context
@@ -94,14 +94,32 @@ typedef void (*EIF_RequestCompletedFn)(EIF_RequestHandle handle,
  */
 typedef void (*EIF_EventFn)(const EIF_Event *event, void *user_context);
 
+/** @brief 購読要求の通知方法。値は末尾への追加だけを行う（ABI）。 */
+typedef enum {
+    EIF_SUBSCRIBE_ON_CHANGE = 0,  /**< 変化したときに通知 */
+    EIF_SUBSCRIBE_PERIODIC = 1    /**< 一定周期で通知（値が変わらなくても通知。周期の計時はREF） */
+} EIF_SubscriptionType;
+
+/**
+ * @brief 購読要求。受け取りたい公開イベント1つと、その通知方法（仕様設計書 9.2.4、9.3.3）。
+ *
+ * EIF_ConnectorDesc::subscriptions に配列で渡す。EIF_Start() が全Connectorの購読要求をまとめ、
+ * 「公開イベント・通知方法・周期」の組合せごとにREFの購読を1回だけ登録する。
+ */
+typedef struct {
+    eif_event_id_t id;          /**< 受け取りたい公開イベントID。1つのConnectorの中で重複しないこと */
+    EIF_SubscriptionType type;  /**< 通知方法（その公開イベントで指定できるもの） */
+    uint32_t interval_ms;       /**< 定期通知の周期[ms]。PERIODIC では1以上、ON_CHANGE では0 */
+} EIF_SubscriptionRequest;
+
 /** @brief Connectorの登録内容。EIFが内容をコピーする（関数とuser_contextの指す先はプログラム終了まで有効であること）。 */
 typedef struct {
-    const char *name;                            /**< ログ用 */
-    EIF_RequestCompletedFn on_request_completed; /**< 必須 */
-    EIF_EventFn on_event;                        /**< 不要ならNULL */
-    const eif_event_id_t *event_filter;          /**< 受け取る公開イベントIDの配列 */
-    size_t event_filter_count;                   /**< event_filter の要素数 */
-    void *user_context;                          /**< callbackへそのまま渡す */
+    const char *name;                              /**< ログ用 */
+    EIF_RequestCompletedFn on_request_completed;   /**< 必須 */
+    EIF_EventFn on_event;                          /**< 不要ならNULL */
+    const EIF_SubscriptionRequest *subscriptions;  /**< 購読要求の配列（登録後に解放してよい） */
+    size_t subscription_count;                     /**< subscriptions の要素数。0なら何も受け取らない */
+    void *user_context;                            /**< callbackへそのまま渡す */
 } EIF_ConnectorDesc;
 
 /**
@@ -122,19 +140,27 @@ EIF_Result EIF_Setup(void);
  * @param[out] out_id 払い出したConnector ID
  *
  * @retval EIF_OK                登録した
- * @retval EIF_ERR_INVALID_PARAM desc・out_id がNULL、on_request_completed がNULL
+ * @retval EIF_ERR_INVALID_PARAM desc・out_id がNULL、on_request_completed がNULL、
+ *                               subscription_count が1以上なのに subscriptions がNULL、購読要求が不正
+ *                               （範囲外の公開イベントID、type と interval_ms の組合せ、
+ *                                その公開イベントで指定できない通知方法、同じ公開イベントの重複）
  * @retval EIF_ERR_BUSY          登録数の上限（EIF_MAX_CONNECTORS）、または EIF_Start() 後
+ *
+ * @note 機種がその公開イベントを通知しない場合はエラーにしない（通知が届かないだけ）。
  */
 EIF_Result EIF_RegisterConnector(const EIF_ConnectorDesc *desc, EIF_ConnectorId *out_id);
 
 /**
- * @brief 情報変化の監視（REFの購読）を登録し、要求の受付を開始する。
+ * @brief 全Connectorの購読要求をまとめてREFへ購読し、要求の受付を開始する。
  *
+ * 「公開イベント・通知方法・周期」の組合せごとにREFの購読を1回だけ登録する。
+ * 機種が通知しない公開イベントは購読しない（エラーにしない）。
  * 以降、Connectorの登録はできない。起動処理のスレッドから1回呼ぶ。
  *
  * @retval EIF_OK              開始した（開始済みを含む）
  * @retval EIF_ERR_UNAVAILABLE EIF_Setup() が未実行
- * @retval その他              監視の登録に失敗（登録済みの購読は残る。QA-07）
+ * @retval EIF_ERR_BUSY        購読要求の組合せが上限（8）を超える（REFへの購読はしない）
+ * @retval その他              購読の登録に失敗（登録済みの購読は残る）
  */
 EIF_Result EIF_Start(void);
 

@@ -51,7 +51,8 @@ static bool accessors_valid(const EIF_AccessorSet *p)
            (p->control->is_supported != NULL) && (p->control->submit != NULL) && (p->control->cancel != NULL) &&
            (p->control->query != NULL) && (p->control->set_done_handler != NULL) &&
            (p->info->is_supported != NULL) && (p->info->public_size != NULL) && (p->info->read != NULL) &&
-           (p->info->watch != NULL) && (p->setting->is_supported != NULL) && (p->setting->store != NULL);
+           (p->info->is_event_supported != NULL) && (p->info->watch_event != NULL) &&
+           (p->setting->is_supported != NULL) && (p->setting->store != NULL);
 }
 
 /**
@@ -86,13 +87,14 @@ EIF_Result EIF_Frame_Initialize(const EIF_AccessorSet *acc)
 }
 
 /**
- * @brief 情報変化の監視を登録し、要求の受付を開始する。
+ * @brief 購読要求をまとめてREFへ購読し、要求の受付を開始する（詳細設計書 4.2.8）。
  *
- * 手順：Connectorの登録を締め切る → 通知定義表に従って監視を依頼する → STARTED にする。
+ * 手順：Connectorの登録を締め切る → 購読表を作り、組合せごとに購読を依頼する → STARTED にする。
  *
  * @retval EIF_OK              開始した（開始済みを含む）
  * @retval EIF_ERR_UNAVAILABLE 未初期化
- * @retval その他              監視の依頼に失敗（eif_watcher_start() の結果）
+ * @retval EIF_ERR_BUSY        購読表の行数が上限を超える
+ * @retval その他              購読の依頼に失敗（eif_watcher_start() の結果）
  *
  * @note 起動処理のスレッド [C1] から1回呼ぶ。
  */
@@ -111,7 +113,7 @@ EIF_Result EIF_Start(void)
     if (result == EIF_OK) {
         atomic_store(&s_state, EIF_STATE_STARTED);
     }
-    /* 失敗時はINITIALIZEDのまま。登録済みの購読は解除できない（QA-07） */
+    /* 失敗時はINITIALIZEDのまま。登録済みの購読はREFに解除APIが無いため残る */
     eif_mutex_unlock(&s_init_lock);
     return result;
 }
@@ -128,6 +130,5 @@ void EIF_Frame_ResetForTest(void)
     eif_registry_reset();
     eif_tracker_reset();
     eif_watcher_reset();
-    eif_cache_reset();
     eif_mutex_unlock(&s_init_lock);
 }

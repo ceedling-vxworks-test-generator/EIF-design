@@ -1,6 +1,6 @@
 /**
  * @file ref_maps.c
- * @brief MiniPrinterの対応表：公開情報・公開設定 ⇔ REFのID・型（詳細設計書 6.5.2、6.5.3）。
+ * @brief MiniPrinterの対応表：公開情報・公開設定・公開イベント ⇔ REFのID・型（詳細設計書 3.3.2〜3.3.4）。
  *
  * REFの製品別ヘッダー（rim_api.h：MiniPrinter）を参照してよいのは、このフォルダだけ。
  * 変換関数は純粋関数とする（登録・送信・排他をしない。入力から出力を作るだけ）。
@@ -56,6 +56,7 @@ bool mp_network_to_public(const EIF_RefView *src, size_t n, void *out_public, si
 bool mp_network_from_public(const void *merged, const void *current_public, const void *current_ref, void *out_ref,
                             size_t ref_size);
 bool mp_alarm_list_to_public(const EIF_RefView *src, size_t n, void *out_public, size_t size);
+bool mp_fault_to_event(eif_event_id_t id, const void *ref_message, EIF_Event *out);
 
 /**
  * @brief ネットワーク設定：REFの値 → 公開モデル（EIF_RefToPublicFn）。
@@ -144,7 +145,7 @@ static void fault_to_alarm(RIM_FaultCode code, eif_alarm_t *out)
  * @brief アラーム一覧：REFの異常情報リスト → 公開アラーム一覧（EIF_RefToPublicFn）。
  *
  * 発生中（RIM_FAULT_STATE_ACTIVE）の異常だけを、EIF_ALARM_LIST_MAX 件まで詰める。
- * 発生／解消の差分は、この一覧をもとにFrameが求める。
+ * 取得（EIF_GetInfo）用。発生／解消のイベントはREFの通知から mp_fault_to_event() で作る。
  *
  * @param[in]  src        [0] RIM_FaultInfoList
  * @param[in]  n          src の要素数（1であること）
@@ -171,6 +172,36 @@ bool mp_alarm_list_to_public(const EIF_RefView *src, size_t n, void *out_public,
     return true;
 }
 
+/* ---------------------------------------------------------------- エラーの発生／解消（イベント） */
+
+/**
+ * @brief エラーの発生／解消：REFの通知内容 → 公開イベント（EIF_RefToEventFn）。
+ *
+ * 発生／解消の判定はREF（RIM）が行い、異常1件ごとに通知する前提。EIFは前回値を持たない。
+ * 暫定：RIMの異常1件ごとの通知は未提供のため、通知内容を RIM_FaultInfo（異常1件）とみなす。
+ * 通知の名前と内容はREF（RIM）と調整して確定し、ここと対応表の ref_source_id を合わせる。
+ *
+ * @param[in]  id          EIF_EVT_ERROR_RAISED または EIF_EVT_ERROR_RESOLVED
+ * @param[in]  ref_message RIM_FaultInfo（暫定）
+ * @param[out] out         公開イベント（payload.alarm）
+ * @return 状態が公開イベントに合えば true（RAISED＝ACTIVE、RESOLVED＝HEALED）。合わなければ false
+ */
+bool mp_fault_to_event(eif_event_id_t id, const void *ref_message, EIF_Event *out)
+{
+    const RIM_FaultInfo *f = (const RIM_FaultInfo *)ref_message;
+    if ((f == NULL) || (out == NULL)) {
+        return false;
+    }
+    if (!((id == EIF_EVT_ERROR_RAISED) && (f->state == RIM_FAULT_STATE_ACTIVE)) &&
+        !((id == EIF_EVT_ERROR_RESOLVED) && (f->state == RIM_FAULT_STATE_HEALED))) {
+        return false; /* 同じREFの通知を発生・解消の両方で購読するため、もう一方の通知はここで捨てる */
+    }
+    memset(out, 0, sizeof(*out));
+    out->event_id = id;
+    fault_to_alarm(f->code, &out->payload.alarm);
+    return true;
+}
+
 /* ---------------------------------------------------------------- 対応表 */
 
 /** @brief 情報の対応表。1行＝1公開情報。 */
@@ -178,10 +209,10 @@ const EIF_RefInfoMap g_ref_info_map[] = {
     { EIF_INFO_NETWORK_SETTINGS,
       { RI_DATA_NETWORK_INFO, RI_DATA_HOSTNAME, RI_DATA_MACADDRESS },
       { sizeof(RIM_network_info_t), RIM_HOSTNAME_LEN, RIM_MACADDRESS_LEN }, 3U,
-      sizeof(eif_network_settings_t), RI_TRIGGER_ON_CHANGE, 0U, mp_network_to_public },
+      sizeof(eif_network_settings_t), mp_network_to_public },
     { EIF_INFO_ALARM_LIST,
       { RI_DATA_FAULT_INFO_LIST }, { sizeof(RIM_FaultInfoList) }, 1U,
-      sizeof(eif_alarm_list_t), RI_TRIGGER_ON_CHANGE, 0U, mp_alarm_list_to_public },
+      sizeof(eif_alarm_list_t), mp_alarm_list_to_public },
 };
 /** @brief 情報の対応表の行数。 */
 const size_t g_ref_info_map_count = sizeof(g_ref_info_map) / sizeof(g_ref_info_map[0]);
@@ -193,3 +224,14 @@ const EIF_RefSettingMap g_ref_setting_map[] = {
 };
 /** @brief 設定の対応表の行数。 */
 const size_t g_ref_setting_map_count = sizeof(g_ref_setting_map) / sizeof(g_ref_setting_map[0]);
+
+/**
+ * @brief イベントの対応表。1行＝1公開イベント。
+ * 暫定：REFの通知は異常情報リスト（RI_DATA_FAULT_INFO_LIST）の購読で受け、変換関数で発生／解消に振り分ける。
+ */
+const EIF_RefEventMap g_ref_event_map[] = {
+    { EIF_EVT_ERROR_RAISED,   RI_DATA_FAULT_INFO_LIST, true, false, mp_fault_to_event },
+    { EIF_EVT_ERROR_RESOLVED, RI_DATA_FAULT_INFO_LIST, true, false, mp_fault_to_event },
+};
+/** @brief イベントの対応表の行数。 */
+const size_t g_ref_event_map_count = sizeof(g_ref_event_map) / sizeof(g_ref_event_map[0]);

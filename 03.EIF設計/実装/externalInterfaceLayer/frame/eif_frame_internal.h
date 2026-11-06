@@ -11,10 +11,10 @@
 
 #include "eif_frame_api.h"
 
-/** @brief 前回値（StateCache）として保持できる合計バイト数。 */
-#define EIF_STATE_CACHE_BYTES (4096U)
-/** @brief 1回の変化で生成できるイベントの最大数。 */
-#define EIF_MAX_EVENTS_PER_NOTIFY (8U)
+/** @brief 1つのConnectorが登録できる購読要求の数（公開イベントごとに1件まで）。 */
+#define EIF_MAX_SUBSCRIPTIONS_PER_CONNECTOR ((size_t)EIF_EVT_COUNT)
+/** @brief 購読表の行数の上限（REF Accessorの監視登録表の上限と同じ）。 */
+#define EIF_MAX_SUBSCRIPTIONS (8U)
 /** @brief 公開モデルの最大サイズ（作業用バッファ）。 */
 #define EIF_PUBLIC_MODEL_MAX (2048U)
 
@@ -34,12 +34,21 @@ bool eif_frame_is_started(void);
 
 /* ================================================================ connector（eif_connector_registry.c） */
 
-/** @brief Connector登録表の1行。 */
+/** @brief Connector登録表の1行（詳細設計書 3.2.1 ConnectorEntry）。 */
 typedef struct {
     EIF_ConnectorId id;      /**< Connector ID（1〜EIF_MAX_CONNECTORS） */
-    EIF_ConnectorDesc desc;  /**< 登録内容のコピー */
-    uint32_t event_mask;     /**< event_filter をビット列にしたもの（bit n ＝ イベントID n） */
+    EIF_ConnectorDesc desc;  /**< 登録内容のコピー（desc.subscriptions は保持しない＝NULL） */
+    EIF_SubscriptionRequest subscriptions[EIF_MAX_SUBSCRIPTIONS_PER_CONNECTOR]; /**< 登録時に写した購読要求 */
+    size_t subscription_count; /**< subscriptions の件数 */
 } eif_connector_t;
+
+/**
+ * @brief その公開イベントで、その通知方法を指定できるか（公開イベントの定義。機種によらない）。
+ * @param[in] id   公開イベントID
+ * @param[in] type 通知方法
+ * @return 指定できれば true
+ */
+bool eif_event_allows(eif_event_id_t id, EIF_SubscriptionType type);
 
 /** @brief 登録を締め切る。以降の EIF_RegisterConnector() は EIF_ERR_BUSY。EIF_Start() から呼ぶ。 */
 void eif_registry_close(void);
@@ -65,11 +74,12 @@ void eif_registry_reset(void);
 /* ================================================================ notify（eif_event_dispatcher.c） */
 
 /**
- * @brief 公開イベントを、受信フィルタに一致するConnectorへ登録順に配信する。
- * @param[in] event 公開イベント（呼出し中だけ有効）
+ * @brief 公開イベントを、connector_mask に含まれるConnectorへ登録順に配信する。
+ * @param[in] event          公開イベント（呼出し中だけ有効）
+ * @param[in] connector_mask 配信先（bit (ID-1) ＝ Connector ID）。購読表の行の値
  * @note 呼出し元のcontext（REFの通知ワーカー [C4]）のまま、各Connectorの on_event を直接呼ぶ。
  */
-void eif_dispatch_event(const EIF_Event *event);
+void eif_dispatch_event(const EIF_Event *event, uint32_t connector_mask);
 
 /* ================================================================ request（eif_request_tracker.c／eif_request_gateway.c） */
 
@@ -150,46 +160,17 @@ void eif_tracker_reset(void);
 EIF_Result eif_gateway_track(EIF_Ticket ticket, EIF_ConnectorId origin, eif_request_id_t request_id,
                              uint64_t origin_token, EIF_RequestHandle *out_handle);
 
-/* ================================================================ notify（eif_watcher.c：監視と差分） */
+/* ================================================================ notify（eif_watcher.c：購読表） */
 
 /**
- * @brief 通知定義表に従って、システム情報IFへ監視を依頼する。EIF_Start() から呼ぶ。
- * @retval EIF_OK           依頼した（この機種で公開していない情報は飛ばす）
- * @retval EIF_ERR_INTERNAL StateCacheの容量不足
- * @retval その他           watch() の失敗
+ * @brief 全Connectorの購読要求から購読表を作り、組合せごとにシステム情報IFへ購読を依頼する。EIF_Start() から呼ぶ。
+ * @retval EIF_OK       依頼した（この機種で通知しない購読要求は飛ばす）
+ * @retval EIF_ERR_BUSY 購読表の行数が上限（EIF_MAX_SUBSCRIPTIONS）を超える
+ * @retval その他       watch_event() の失敗
  */
 EIF_Result eif_watcher_start(void);
 
-/** @brief 試験専用。監視の状態を戻す（現在は保持する状態が無い）。 */
+/** @brief 試験専用。購読表を空にする。 */
 void eif_watcher_reset(void);
-
-/* ================================================================ cache（eif_state_cache.c） */
-
-/**
- * @brief 公開情報1つ分の前回値の領域を割り当てる。EIF_Start() 時に呼ぶ。
- * @param[in] id   公開情報ID
- * @param[in] size 公開モデルのサイズ
- * @return 割り当てた（割当て済みを含む）なら true。容量・スロット不足なら false
- */
-bool eif_cache_allocate(eif_info_id_t id, size_t size);
-
-/**
- * @brief 前回値のスロットをロックし、前回値を返す。必ず eif_cache_store_and_unlock() と対で呼ぶ。
- * @param[in]  id           公開情報ID
- * @param[out] out_prev     前回値（ロック中だけ有効）。未割当てならNULL
- * @param[out] out_has_prev 前回値があれば true（起動直後は false）
- */
-void eif_cache_lock(eif_info_id_t id, const void **out_prev, bool *out_has_prev);
-
-/**
- * @brief 今回値を前回値として保存し、スロットのロックを放す。
- * @param[in] id   公開情報ID
- * @param[in] data 今回値（NULLなら保存せずにロックだけ放す）
- * @param[in] size data のサイズ（割当て時と異なれば保存しない）
- */
-void eif_cache_store_and_unlock(eif_info_id_t id, const void *data, size_t size);
-
-/** @brief 試験専用。全スロットを解放する。 */
-void eif_cache_reset(void);
 
 #endif /* EIF_FRAME_INTERNAL_H */

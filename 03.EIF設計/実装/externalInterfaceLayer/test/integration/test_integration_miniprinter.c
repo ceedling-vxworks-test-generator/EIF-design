@@ -66,7 +66,7 @@ static RIM_network_info_t s_net;               /**< REFのネットワーク情�
 static uint8_t s_host[RIM_HOSTNAME_LEN];       /**< REFのホスト名 */
 static uint8_t s_mac[RIM_MACADDRESS_LEN];      /**< REFのMACアドレス */
 static RIM_FaultInfoList s_faults;             /**< REFの異常情報リスト */
-static RINotificationCallback s_rim_cb[4];     /**< 購読で渡された通知callback */
+static RI_SUBSCRIPTION_REQUEST s_rim_req[8];   /**< 購読で渡された購読要求 */
 static int s_rim_subs;                         /**< 購読の数 */
 
 /**
@@ -103,14 +103,17 @@ RIStatus RIM_SetBinary(uint32_t data_id, const void *data, size_t size)
 }
 
 /**
- * @brief RIMのスタブ：通知callbackを記録し、購読ID（500から）を払い出す。
+ * @brief RIMのスタブ：購読要求を記録し、購読ID（500から）を払い出す。
  * @param[in]  req    購読要求
  * @param[out] out_id 購読ID
- * @return RI_SUCCESS
+ * @return RI_SUCCESS（記録できる数を超えたら RI_INVALID_PARAMETER）
  */
 RIStatus RIM_Subscribe(const RI_SUBSCRIPTION_REQUEST *req, uint64_t *out_id)
 {
-    s_rim_cb[s_rim_subs] = req->callback;
+    if ((size_t)s_rim_subs >= sizeof(s_rim_req) / sizeof(s_rim_req[0])) {
+        return RI_INVALID_PARAMETER;
+    }
+    s_rim_req[s_rim_subs] = *req;
     *out_id = 500U + (uint64_t)s_rim_subs;
     s_rim_subs++;
     return RI_SUCCESS;
@@ -154,11 +157,18 @@ static void on_event(const EIF_Event *e, void *c)
     }
 }
 
-/** @brief 前処理：スタブの値を戻し、MiniPrinterでセットアップ → 登録 → 開始 まで済ませる。 */
+/**
+ * @brief 前処理：スタブの値を戻し、MiniPrinterでセットアップ → 登録 → 開始 まで済ませる。
+ * 購読要求には、MiniPrinterが通知しない警告の発生も含める（購読されないことを確かめる）。
+ */
 static void setup(void)
 {
-    static const eif_event_id_t filter[] = { EIF_EVT_ERROR_RAISED, EIF_EVT_ERROR_RESOLVED };
-    const EIF_ConnectorDesc d = { "test", on_completed, on_event, filter, 2U, NULL };
+    static const EIF_SubscriptionRequest subs[] = {
+        { EIF_EVT_ERROR_RAISED, EIF_SUBSCRIBE_ON_CHANGE, 0U },
+        { EIF_EVT_ERROR_RESOLVED, EIF_SUBSCRIBE_ON_CHANGE, 0U },
+        { EIF_EVT_WARNING_RAISED, EIF_SUBSCRIBE_ON_CHANGE, 0U },
+    };
+    const EIF_ConnectorDesc d = { "test", on_completed, on_event, subs, 3U, NULL };
     const RIM_network_info_t net = { 1U, { 192U, 168U, 1U, 5U }, { 255U, 255U, 255U, 0U }, { 192U, 168U, 1U, 1U } };
 
     EIF_Frame_ResetForTest();
@@ -220,18 +230,49 @@ static void test_patch_network_writes_ref(void)
     TEST_EQ(EIF_PatchSetting(s_id, EIF_SETTING_NETWORK, &p, sizeof(p), 1U, &h), EIF_ERR_INVALID_PARAM);
 }
 
-/** @brief 通知：REFの異常情報リストの変化が、発生／解消のイベントとして届く。 */
-static void test_fault_list_to_events(void)
+/** @brief 購読：機種が通知する公開イベントだけを、REFイベント対応表に従ってREFへ購読する。 */
+static void test_subscribe_through_ref_event_table(void)
 {
-    TEST_EQ(s_rim_subs, 1); /* アラーム一覧の監視だけが登録される */
-    s_faults.count = 1U;
-    s_faults.items[0].code = (RIM_FaultCode)4;
-    s_faults.items[0].state = RIM_FAULT_STATE_ACTIVE;
-    s_rim_cb[0](500U, NULL);
+    TEST_EQ(s_rim_subs, 2); /* 発生・解消。警告の発生はMiniPrinterの対応表に無いため購読しない */
+    for (int i = 0; i < s_rim_subs; i++) {
+        TEST_EQ(s_rim_req[i].targetType, RI_TARGET_DATA);
+        TEST_EQ(s_rim_req[i].targetId, (uint32_t)RI_DATA_FAULT_INFO_LIST);
+        TEST_EQ(s_rim_req[i].trigger, RI_TRIGGER_ON_CHANGE);
+        TEST_EQ(s_rim_req[i].intervalMs, 0U);
+        TEST_EQ(s_rim_req[i].method, RI_METHOD_CALLBACK);
+        TEST_ASSERT(s_rim_req[i].callback != NULL);
+    }
+}
+
+/**
+ * @brief REF（RIM）からの異常1件の通知を、全購読へ届ける（暫定：通知内容＝RIM_FaultInfo）。
+ * @param[in] code  異常コード
+ * @param[in] state 発生／解消
+ */
+static void rim_notify_fault(RIM_FaultCode code, RIM_FaultState state)
+{
+    RIM_FaultInfo f;
+    memset(&f, 0, sizeof(f));
+    f.code = code;
+    f.state = state;
+    for (int i = 0; i < s_rim_subs; i++) {
+        s_rim_req[i].callback(500U + (uint64_t)i, &f);
+    }
+}
+
+/** @brief 通知：REFが判定した発生／解消の通知1件が、公開イベント1件として届く。EIFは前回値と比べない。 */
+static void test_fault_notification_to_events(void)
+{
+    rim_notify_fault((RIM_FaultCode)4, RIM_FAULT_STATE_ACTIVE);
     TEST_EQ(s_raised, 1);
-    s_faults.count = 0U;
-    s_rim_cb[0](500U, NULL);
+    TEST_EQ(s_resolved, 0);   /* 解消の購読に届いた発生は捨てる */
+    rim_notify_fault((RIM_FaultCode)4, RIM_FAULT_STATE_ACTIVE);
+    TEST_EQ(s_raised, 2);     /* 同じ内容でも、通知が届いた分だけ届く */
+    rim_notify_fault((RIM_FaultCode)4, RIM_FAULT_STATE_HEALED);
     TEST_EQ(s_resolved, 1);
+    TEST_EQ(s_raised, 2);
+    s_rim_req[0].callback(999U, NULL); /* 未登録の購読IDは捨てる */
+    TEST_EQ(s_raised + s_resolved, 3);
 }
 
 /**
@@ -244,6 +285,7 @@ int main(void)
     RUN_TEST(setup, test_request_goes_through_pcl_accessor_table);
     RUN_TEST(setup, test_get_network_through_ref_accessor);
     RUN_TEST(setup, test_patch_network_writes_ref);
-    RUN_TEST(setup, test_fault_list_to_events);
+    RUN_TEST(setup, test_subscribe_through_ref_event_table);
+    RUN_TEST(setup, test_fault_notification_to_events);
     return TEST_SUMMARY();
 }

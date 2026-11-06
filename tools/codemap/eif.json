@@ -31,7 +31,7 @@
   },
   "indirect_calls": {
     "pcl_accessor_on_completed": ["eif_tracker_on_done"],
-    "on_ref_notified": ["on_info_changed"],
+    "on_ref_notified": ["mp_fault_to_event", "on_info_event"],
     "read_public": ["mp_network_to_public", "mp_alarm_list_to_public"],
     "setting_store": ["mp_network_from_public"],
     "EIF_PatchSetting": ["merge_network"]

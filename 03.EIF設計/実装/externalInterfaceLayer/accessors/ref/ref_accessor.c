@@ -12,16 +12,16 @@
 
 /** @brief 公開モデル・REFの型を一時的に置く領域の大きさ。 */
 #define REF_WORK_BYTES (2048U)
-/** @brief 監視できる公開情報の数。 */
+/** @brief 監視の登録表の行数（Frameの購読表の上限と同じ）。 */
 #define REF_MAX_WATCH (8U)
 
-/** @brief 監視の登録表の1行（REFの購読IDと、変化を知らせるFrameの関数の対応）。 */
+/** @brief 監視の登録表の1行（詳細設計書 3.3.5 WatchEntry。REFの購読IDと、Frameの受け口の対応）。 */
 typedef struct {
-    bool used;                  /**< 使用中 */
-    uint64_t subscription_id;   /**< REFが払い出した購読ID */
-    const EIF_RefInfoMap *map;  /**< 対応表の行 */
-    EIF_InfoChangedFn fn;       /**< 変化時に呼ぶFrameの関数 */
-    void *ctx;                  /**< fn へそのまま渡す値 */
+    bool used;                   /**< 使用中 */
+    uint64_t subscription_id;    /**< REFが払い出した購読ID */
+    const EIF_RefEventMap *map;  /**< イベントの対応表の行 */
+    EIF_InfoEventFn fn;          /**< Frameの受け口（on_info_event） */
+    void *ctx;                   /**< Frameの購読表の行 */
 } watch_t;
 
 static watch_t s_watch[REF_MAX_WATCH]; /**< 監視の登録表（EIF_Start() 後は不変） */
@@ -55,6 +55,21 @@ static const EIF_RefInfoMap *find_info(eif_info_id_t id)
     for (size_t i = 0U; i < g_ref_info_map_count; i++) {
         if (g_ref_info_map[i].info_id == id) {
             return &g_ref_info_map[i];
+        }
+    }
+    return NULL;
+}
+
+/**
+ * @brief イベントの対応表から公開イベントIDの行を探す。
+ * @param[in] id 公開イベントID
+ * @return 対応表の行。無ければNULL（＝この機種では通知しない）
+ */
+static const EIF_RefEventMap *find_event(eif_event_id_t id)
+{
+    for (size_t i = 0U; i < g_ref_event_map_count; i++) {
+        if (g_ref_event_map[i].event_id == id) {
+            return &g_ref_event_map[i];
         }
     }
     return NULL;
@@ -169,24 +184,47 @@ static EIF_Result info_read(eif_info_id_t id, void *out, size_t size)
 }
 
 /**
- * @brief RIMへ登録する共通の通知トランポリン。購読IDから監視を引き、最新値を公開モデルにしてFrameへ渡す。
+ * @brief 対応表の行で、その通知方法を指定できるか。
+ * @param[in] m    イベントの対応表の行
+ * @param[in] type 通知方法
+ * @return 指定できれば true
+ */
+static bool event_allows(const EIF_RefEventMap *m, EIF_SubscriptionType type)
+{
+    return ((type == EIF_SUBSCRIBE_ON_CHANGE) && m->allow_on_change) ||
+           ((type == EIF_SUBSCRIBE_PERIODIC) && m->allow_periodic);
+}
+
+/**
+ * @brief その購読要求を、この機種が通知できるか（詳細設計書 4.3.7）。
+ * @param[in] req 購読要求
+ * @return イベントの対応表に行があり、指定の通知方法が許されていれば true
+ */
+static bool info_is_event_supported(const EIF_SubscriptionRequest *req)
+{
+    const EIF_RefEventMap *m = (req != NULL) ? find_event(req->id) : NULL;
+    return (m != NULL) && event_allows(m, req->type);
+}
+
+/**
+ * @brief RIMへ登録する共通の通知トランポリン。購読IDから監視を引き、通知内容を公開イベントにしてFrameへ渡す。
  *
  * @param[in] subscription_id REFが払い出した購読ID
- * @param[in] message         REFの通知内容（使わない。最新値は取り直す）
+ * @param[in] message         REFの通知内容（変換関数へそのまま渡す）
  *
- * @note REFの通知ワーカー [C4] から呼ばれる。取得・変換に失敗したらFrameへ渡さない。
- *       作業領域は静的に1つで、REFの通知が直列に来る前提（QA-11）。
+ * @note REFの通知ワーカー [C4] から呼ばれる。通知1件につき公開イベント1件。
+ *       EIFは前回値を持たず、最新値の取り直しもしない。変換できない通知はFrameへ渡さない。
+ *       監視の登録表は EIF_Start() 後は不変のため、ロックしない。
  */
 static void on_ref_notified(uint64_t subscription_id, const void *message)
 {
-    static alignas(max_align_t) unsigned char buf[REF_WORK_BYTES]; /* 通知は直列に来る前提（QA-11） */
-    (void)message;
-
     for (size_t i = 0U; i < REF_MAX_WATCH; i++) {
         const watch_t *w = &s_watch[i];
         if (w->used && (w->subscription_id == subscription_id)) {
-            if (read_public(w->map, buf, w->map->public_size) == EIF_OK) {
-                w->fn(w->map->info_id, buf, w->map->public_size, w->ctx); /* REFの通知contextのままFrameへ */
+            EIF_Event ev;
+            memset(&ev, 0, sizeof(ev));
+            if ((message != NULL) && w->map->to_event(w->map->event_id, message, &ev)) {
+                w->fn(&ev, w->ctx); /* REFの通知contextのままFrameへ */
             }
             return;
         }
@@ -195,42 +233,43 @@ static void on_ref_notified(uint64_t subscription_id, const void *message)
 }
 
 /**
- * @brief 変化（または定期）の通知を依頼する。対応表の先頭のREF IDを、対応表の通知契機で購読する。
+ * @brief 購読要求1件をREFの購読要求へ変換して購読する（詳細設計書 4.3.6）。
  *
- * @param[in] id  公開情報ID
- * @param[in] fn  変化時に呼ぶFrameの関数
- * @param[in] ctx fn へそのまま渡す値
+ * - id          → targetType＝データ、targetId＝対応表の ref_source_id
+ * - type        → trigger（ON_CHANGE → RI_TRIGGER_ON_CHANGE、PERIODIC → RI_TRIGGER_PERIODIC）
+ * - interval_ms → intervalMs
+ * - method＝callback、callback＝on_ref_notified
+ *
+ * @param[in] req 購読要求
+ * @param[in] fn  通知時に呼ぶFrameの関数
+ * @param[in] ctx fn へそのまま渡す値（Frameの購読表の行）
  *
  * @retval EIF_OK              購読した
- * @retval EIF_ERR_NOT_EXPOSED 対応表に無い、fn がNULL
- * @retval EIF_ERR_INTERNAL    公開モデルが作業領域より大きい
+ * @retval EIF_ERR_NOT_EXPOSED 対応表に無い、指定できない通知方法、fn がNULL
  * @retval EIF_ERR_BUSY        監視の登録表が満杯
  * @retval その他              RIM_Subscribe() の結果の変換結果
  *
- * @note EIF_Start() から、起動処理のスレッド [C1] で呼ばれる。
+ * @note EIF_Start() から、起動処理のスレッド [C1] で呼ばれる。定期通知の周期の計時はREF。
  */
-static EIF_Result info_watch(eif_info_id_t id, EIF_InfoChangedFn fn, void *ctx)
+static EIF_Result info_watch_event(const EIF_SubscriptionRequest *req, EIF_InfoEventFn fn, void *ctx)
 {
-    const EIF_RefInfoMap *m = find_info(id);
-    RI_SUBSCRIPTION_REQUEST req;
+    const EIF_RefEventMap *m = (req != NULL) ? find_event(req->id) : NULL;
+    RI_SUBSCRIPTION_REQUEST rreq;
     uint64_t sub_id = 0U;
 
-    if ((m == NULL) || (fn == NULL)) {
+    if ((m == NULL) || (fn == NULL) || !event_allows(m, req->type)) {
         return EIF_ERR_NOT_EXPOSED;
-    }
-    if (m->public_size > REF_WORK_BYTES) {
-        return EIF_ERR_INTERNAL;
     }
     for (size_t i = 0U; i < REF_MAX_WATCH; i++) {
         if (!s_watch[i].used) {
-            memset(&req, 0, sizeof(req));
-            req.targetType = RI_TARGET_DATA;
-            req.targetId = m->source_ids[0];
-            req.trigger = m->trigger;
-            req.method = RI_METHOD_CALLBACK;
-            req.intervalMs = m->interval_ms;
-            req.callback = on_ref_notified; /* 変化時にREFから呼んでもらう関数（購読ハンドラ） */
-            const RIStatus s = RIM_Subscribe(&req, &sub_id);
+            memset(&rreq, 0, sizeof(rreq));
+            rreq.targetType = RI_TARGET_DATA;
+            rreq.targetId = m->ref_source_id;
+            rreq.trigger = (req->type == EIF_SUBSCRIBE_PERIODIC) ? RI_TRIGGER_PERIODIC : RI_TRIGGER_ON_CHANGE;
+            rreq.method = RI_METHOD_CALLBACK;
+            rreq.intervalMs = req->interval_ms;
+            rreq.callback = on_ref_notified; /* 通知時にREFから呼んでもらう関数（購読ハンドラ） */
+            const RIStatus s = RIM_Subscribe(&rreq, &sub_id);
             if (s != RI_SUCCESS) {
                 return map_ri(s);
             }
@@ -249,7 +288,8 @@ const EIF_SystemInfoIf g_ref_info_if = {
     .is_supported = info_is_supported,
     .public_size = info_public_size,
     .read = info_read,
-    .watch = info_watch,
+    .is_event_supported = info_is_event_supported,
+    .watch_event = info_watch_event,
 };
 
 /* ---------------------------------------------------------------- 設定保存IF（EIF_SettingStoreIf）の実装：REFへ直接書き込む */

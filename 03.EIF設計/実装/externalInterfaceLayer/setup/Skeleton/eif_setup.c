@@ -24,8 +24,10 @@ static bool none_info(eif_info_id_t id) { (void)id; return false; }
 static size_t none_size(eif_info_id_t id) { (void)id; return 0U; }
 /** @brief システム情報IF：取得しない。 @param[in] id 公開情報ID @param[out] o 書かない @param[in] s サイズ @return EIF_ERR_NOT_EXPOSED */
 static EIF_Result none_read(eif_info_id_t id, void *o, size_t s) { (void)id; (void)o; (void)s; return EIF_ERR_NOT_EXPOSED; }
-/** @brief システム情報IF：監視しない。 @param[in] id 公開情報ID @param[in] f 関数 @param[in] c 値 @return EIF_ERR_NOT_EXPOSED */
-static EIF_Result none_watch(eif_info_id_t id, EIF_InfoChangedFn f, void *c) { (void)id; (void)f; (void)c; return EIF_ERR_NOT_EXPOSED; }
+/** @brief システム情報IF：通知しない。 @param[in] r 購読要求 @return 常に false */
+static bool none_event(const EIF_SubscriptionRequest *r) { (void)r; return false; }
+/** @brief システム情報IF：購読しない。 @param[in] r 購読要求 @param[in] f 関数 @param[in] c 値 @return EIF_ERR_NOT_EXPOSED */
+static EIF_Result none_watch(const EIF_SubscriptionRequest *r, EIF_InfoEventFn f, void *c) { (void)r; (void)f; (void)c; return EIF_ERR_NOT_EXPOSED; }
 /** @brief 設定保存IF：公開しない。 @param[in] id 公開設定ID @return 常に false */
 static bool none_setting(eif_setting_id_t id) { (void)id; return false; }
 
@@ -44,7 +46,7 @@ static EIF_Result none_store(eif_setting_id_t id, const void *m, size_t s, EIF_T
 }
 
 static const EIF_ProductControlIf s_control = { none_request, none_submit, none_cancel, none_query, none_done };
-static const EIF_SystemInfoIf s_info = { none_info, none_size, none_read, none_watch };
+static const EIF_SystemInfoIf s_info = { none_info, none_size, none_read, none_event, none_watch };
 static const EIF_SettingStoreIf s_setting = { none_setting, none_store };
 
 /**

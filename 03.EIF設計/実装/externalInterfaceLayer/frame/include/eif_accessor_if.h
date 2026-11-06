@@ -75,18 +75,17 @@ typedef struct {
 /* ---------------------------------------------------------------- システム情報IF */
 
 /**
- * @brief 情報の変化を受け取るFrameの関数（実体は Watcher の on_info_changed()）。
+ * @brief 公開イベントを受け取るFrameの関数（実体は Watcher の on_info_event()）。
  *
- * @param[in] id           変化した公開情報ID
- * @param[in] public_model 最新値（公開モデル。呼出し中だけ有効）
- * @param[in] size         public_model のサイズ
- * @param[in] ctx          watch() で渡した値
+ * @param[in] event 公開イベント（REFの通知1件を変換したもの。呼出し中だけ有効）
+ * @param[in] ctx   watch_event() で渡した値（Frameの購読表の行）
  *
  * @note Accessorは、REFの通知ワーカーのcontext [C4] のまま呼ぶ。
+ *       EIFは前回値を持たない。発生／解消の判定はREF（RIM）等が行い、Accessorは通知を変換するだけ。
  */
-typedef void (*EIF_InfoChangedFn)(eif_info_id_t id, const void *public_model, size_t size, void *ctx);
+typedef void (*EIF_InfoEventFn)(const EIF_Event *event, void *ctx);
 
-/** @brief システム情報IF。公開情報の取得と、変化の監視。 */
+/** @brief システム情報IF。公開情報の取得と、公開イベントの購読。 */
 typedef struct {
     /**
      * @brief この機種で公開している情報か（＝Accessorの対応表に行があるか）。
@@ -109,13 +108,25 @@ typedef struct {
      */
     EIF_Result (*read)(eif_info_id_t id, void *out_public, size_t size);
     /**
-     * @brief 変化（または定期）の通知を依頼する。通知契機は Accessor の対応表で決まる。
-     * @param[in] id  公開情報ID
-     * @param[in] fn  変化時に呼ぶFrameの関数
-     * @param[in] ctx fn へそのまま渡す値
-     * @retval EIF_OK 登録した
+     * @brief その購読要求（公開イベント・通知方法）を、この機種が通知できるか。
+     * @param[in] req 購読要求
+     * @return REFイベント対応表に行があり、指定の通知方法が許されていれば true
      */
-    EIF_Result (*watch)(eif_info_id_t id, EIF_InfoChangedFn fn, void *ctx);
+    bool (*is_event_supported)(const EIF_SubscriptionRequest *req);
+    /**
+     * @brief 購読要求1件について、REFの通知を公開イベントとして fn へ届けるよう依頼する。
+     *
+     * 購読要求をREFの購読要求（通知契機・周期）へ変換して購読する。定期通知の周期の計時はREF。
+     *
+     * @param[in] req 購読要求（呼出し中だけ有効。Accessorは中身をコピーする）
+     * @param[in] fn  通知時に呼ぶFrameの関数
+     * @param[in] ctx fn へそのまま渡す値（Frameの購読表の行）
+     * @retval EIF_OK              購読した
+     * @retval EIF_ERR_NOT_EXPOSED この機種で通知しない公開イベント、または fn がNULL
+     * @retval EIF_ERR_BUSY        監視登録表が満杯
+     * @retval その他              REFへの購読の失敗
+     */
+    EIF_Result (*watch_event)(const EIF_SubscriptionRequest *req, EIF_InfoEventFn fn, void *ctx);
 } EIF_SystemInfoIf;
 
 /* ---------------------------------------------------------------- 設定保存IF */

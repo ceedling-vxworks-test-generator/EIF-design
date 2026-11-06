@@ -75,18 +75,35 @@ static EIF_Result i_read(eif_info_id_t id, void *out, size_t size)
 }
 
 /**
- * @brief 監視：受け口を記録する（変化は試験が g_stub.watch_fn を呼んで起こす）。
- * @param[in] id  公開情報ID（使わない）
- * @param[in] fn  変化の受け口
- * @param[in] ctx fn へ渡す値
- * @return EIF_OK
+ * @brief 通知できるか：g_stub.unsupported_events に無い公開イベントは通知する。
+ * @param[in] req 購読要求
+ * @return 通知できれば true
  */
-static EIF_Result i_watch(eif_info_id_t id, EIF_InfoChangedFn fn, void *ctx)
+static bool i_event_supported(const EIF_SubscriptionRequest *req)
 {
-    (void)id;
-    g_stub.watch_fn = fn;
-    g_stub.watch_ctx = ctx;
+    g_stub.event_supported_calls++;
+    return (g_stub.unsupported_events & (1UL << (unsigned)req->id)) == 0U;
+}
+
+/**
+ * @brief 購読：受け口を記録する（通知は試験が g_stub.watches[i].fn を呼んで起こす）。
+ * @param[in] req 購読要求
+ * @param[in] fn  受け口
+ * @param[in] ctx fn へ渡す値
+ * @return g_stub.watch_result
+ */
+static EIF_Result i_watch_event(const EIF_SubscriptionRequest *req, EIF_InfoEventFn fn, void *ctx)
+{
     g_stub.watch_calls++;
+    if (g_stub.watch_result != EIF_OK) {
+        return g_stub.watch_result;
+    }
+    if ((size_t)g_stub.watch_count < STUB_MAX_WATCH) {
+        stub_watch_t *w = &g_stub.watches[g_stub.watch_count++];
+        w->req = *req;
+        w->fn = fn;
+        w->ctx = ctx;
+    }
     return EIF_OK;
 }
 
@@ -115,7 +132,7 @@ static EIF_Result s_store(eif_setting_id_t id, const void *merged, size_t size, 
 }
 
 static const EIF_ProductControlIf s_control = { c_is_supported, c_submit, c_cancel, c_query, c_set_done };
-static const EIF_SystemInfoIf s_info = { i_is_supported, i_size, i_read, i_watch };
+static const EIF_SystemInfoIf s_info = { i_is_supported, i_size, i_read, i_event_supported, i_watch_event };
 static const EIF_SettingStoreIf s_setting = { s_is_supported, s_store };
 const EIF_AccessorSet g_stub_accessors = { &s_control, &s_info, &s_setting };
 
@@ -127,6 +144,7 @@ void stub_reset(void)
     g_stub.submit_result = EIF_ACCEPTED;
     g_stub.read_result = EIF_OK;
     g_stub.store_result = EIF_OK;
+    g_stub.watch_result = EIF_OK;
     g_stub.network.dhcp = true;
     (void)strcpy(g_stub.network.ip, "10.0.0.2");
     (void)strcpy(g_stub.network.hostname, "mp");

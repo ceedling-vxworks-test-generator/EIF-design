@@ -1,6 +1,6 @@
 /**
  * @file ref_accessor.h
- * @brief REF Accessor。システム情報IFと設定保存IFを実装する（詳細設計書 6.5.2、6.5.3）。
+ * @brief REF Accessor。システム情報IFと設定保存IFを実装する（詳細設計書 3.3.2〜3.3.5、4.3.6、4.3.7）。
  *
  * 共通処理（ref_accessor.c）と、機種ごとの対応表（models/<MODEL>/）に分かれる。
  */
@@ -34,15 +34,13 @@ typedef struct {
  */
 typedef bool (*EIF_RefToPublicFn)(const EIF_RefView *src, size_t src_count, void *out_public, size_t out_size);
 
-/** @brief 公開情報ID → REFのID群・通知契機・変換（機種ごとの対応表の1行）。 */
+/** @brief 公開情報ID → REFのID群・変換（機種ごとの対応表の1行）。 */
 typedef struct {
     eif_info_id_t info_id;                     /**< 公開情報ID */
-    uint32_t source_ids[EIF_REF_MAX_SOURCES];  /**< 取得するREFのData ID（先頭が購読の対象） */
+    uint32_t source_ids[EIF_REF_MAX_SOURCES];  /**< 取得するREFのData ID */
     size_t source_sizes[EIF_REF_MAX_SOURCES];  /**< REFの型のsizeof（型の不一致を検出する） */
     size_t source_count;                       /**< 使う source_ids の数 */
     size_t public_size;                        /**< 公開モデルのsizeof */
-    RI_NOTIFICATION_TRIGGER trigger;           /**< 変化通知／定期通知 */
-    uint32_t interval_ms;                      /**< 定期通知の周期（変化通知なら0） */
     EIF_RefToPublicFn to_public;               /**< 変換関数 */
 } EIF_RefInfoMap;
 
@@ -68,6 +66,26 @@ typedef struct {
     EIF_RefFromPublicFn from_public;  /**< 変換関数 */
 } EIF_RefSettingMap;
 
+/**
+ * @brief 変換関数：REFの通知内容 → 公開イベント（機種ごとの対応表が持つ）。
+ *
+ * @param[in]  id          作る公開イベントID（対応表の行の event_id）
+ * @param[in]  ref_message REFの通知内容（RIMが on_ref_notified() に渡したもの。呼出し中だけ有効）
+ * @param[out] out         公開イベントの書込み先
+ * @return 公開イベントを作ったら true。この公開イベントに当たらない通知（例：解消の購読に届いた発生）、
+ *         通知内容が不正なら false（Frameへ渡さない）
+ */
+typedef bool (*EIF_RefToEventFn)(eif_event_id_t id, const void *ref_message, EIF_Event *out);
+
+/** @brief 公開イベントID → 購読するREFの通知・指定できる通知方法・変換（機種ごとの対応表の1行）。 */
+typedef struct {
+    eif_event_id_t event_id;    /**< 公開イベントID */
+    uint32_t ref_source_id;     /**< 購読するREFの通知（REFのData ID） */
+    bool allow_on_change;       /**< 変化時の通知を指定できる */
+    bool allow_periodic;        /**< 定期通知を指定できる */
+    EIF_RefToEventFn to_event;  /**< 変換関数 */
+} EIF_RefEventMap;
+
 /* ---------------------------------------------------------------- 機種ごとの対応表（models/<MODEL>/ が定義する） */
 
 /** @brief 情報の対応表。表に無い公開情報は公開しない。 */
@@ -78,6 +96,10 @@ extern const size_t g_ref_info_map_count;
 extern const EIF_RefSettingMap g_ref_setting_map[];
 /** @brief g_ref_setting_map の行数。 */
 extern const size_t g_ref_setting_map_count;
+/** @brief イベントの対応表。表に無い公開イベントは通知しない。 */
+extern const EIF_RefEventMap g_ref_event_map[];
+/** @brief g_ref_event_map の行数。 */
+extern const size_t g_ref_event_map_count;
 
 /* ---------------------------------------------------------------- 下位IFの実装 */
 

@@ -45,8 +45,8 @@ target_include_directories(eif_accessors PRIVATE
 target_link_libraries(eif_accessors PUBLIC eif_frame)
 
 # ---------------------------------------------------------------- Connector（外部コンポーネント接続部）
-add_library(eif_connector_api_server STATIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/connectors/api_server/api_server_connector.c)
+file(GLOB EIF_CONNECTOR_API_SERVER_SRCS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/connectors/api_server/*.c)
+add_library(eif_connector_api_server STATIC ${EIF_CONNECTOR_API_SERVER_SRCS})
 target_include_directories(eif_connector_api_server
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/connectors/api_server/include
             ${CMAKE_CURRENT_SOURCE_DIR}/include

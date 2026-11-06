@@ -39,10 +39,21 @@ $CC $CFLAGS $FRAME_INC -Itest -Iaccessors/pcl -Iaccessors/ref \
     setup/MiniPrinter/eif_setup.c test/integration/test_integration_miniprinter.c -o "$OUT/test_integration" -lpthread
 "$OUT/test_integration"
 
-echo "== 4. コンパイル確認（リンクしない）：Skeletonのセットアップ、APIサーバー用Connector"
+echo "== 4. Frame＋REF Accessor（試験用の機種 TestModel の対応表）の結合試験（RIMの関数はスタブ）"
+$CC $CFLAGS $FRAME_INC -Itest -Itest/stubs -Iaccessors/ref -isystem "$RIM_COMMON_INC" -isystem "$RIM_MODEL_INC" \
+    $FRAME_SRCS test/stubs/stub_accessors.c accessors/ref/ref_accessor.c test/models/TestModel/ref_maps.c \
+    test/integration/test_ref_accessor_testmodel.c -o "$OUT/test_ref_testmodel" -lpthread
+"$OUT/test_ref_testmodel"
+
+echo "== 5. APIサーバー用Connectorの試験（APIサーバーの関数は試験用の仮実装、下位はスタブAccessor）"
+$CC $CFLAGS $FRAME_INC -Itest -Itest/stubs -Iconnectors/api_server -Iconnectors/api_server/include \
+    -isystem "$APISV_INC" -isystem "$APISV_INC/rest" \
+    $FRAME_SRCS test/stubs/stub_accessors.c connectors/api_server/*.c test/connector/test_api_server_connector.c \
+    -o "$OUT/test_connector" -lpthread
+"$OUT/test_connector"
+
+echo "== 6. コンパイル確認（リンクしない）：Skeletonのセットアップ"
 $CC $CFLAGS $FRAME_INC -c setup/Skeleton/eif_setup.c
-$CC $CFLAGS -Iinclude -Iconnectors/api_server/include -isystem "$APISV_INC" -isystem "$APISV_INC/rest" \
-    -c connectors/api_server/api_server_connector.c
 rm -f ./*.o
 echo "   OK"
 echo "== すべて成功"

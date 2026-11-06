@@ -36,11 +36,14 @@ bool eif_frame_is_started(void);
 
 /** @brief Connector登録表の1行（詳細設計書 3.2.1 ConnectorEntry）。 */
 typedef struct {
-    EIF_ConnectorId id;      /**< Connector ID（1〜EIF_MAX_CONNECTORS） */
-    EIF_ConnectorDesc desc;  /**< 登録内容のコピー（desc.subscriptions は保持しない＝NULL） */
+    EIF_ConnectorId id;                           /**< Connector ID（1〜EIF_MAX_CONNECTORS） */
+    const char *name;                             /**< ログ用 */
+    EIF_RequestCompletedFn on_request_completed;  /**< 完了callback */
+    EIF_EventFn on_event;                         /**< イベントcallback（NULL可） */
+    void *user_context;                           /**< callbackへそのまま渡す値 */
     EIF_SubscriptionRequest subscriptions[EIF_MAX_SUBSCRIPTIONS_PER_CONNECTOR]; /**< 登録時に写した購読要求 */
-    size_t subscription_count; /**< subscriptions の件数 */
-} eif_connector_t;
+    size_t subscription_count;                    /**< subscriptions の件数 */
+} ConnectorEntry;
 
 /**
  * @brief その公開イベントで、その通知方法を指定できるか（公開イベントの定義。機種によらない）。
@@ -59,14 +62,14 @@ void eif_registry_close(void);
  * @return 登録内容。未登録ならNULL
  * @note 登録は起動時だけで EIF_Start() 後は不変のため、ロックせずに読む。
  */
-const eif_connector_t *eif_registry_get(EIF_ConnectorId id);
+const ConnectorEntry *eif_registry_get(EIF_ConnectorId id);
 
 /**
  * @brief 登録順の index 番目の登録内容を返す（配信で全Connectorを順に見るため）。
  * @param[in] index 0から
  * @return 登録内容。範囲外ならNULL
  */
-const eif_connector_t *eif_registry_at(size_t index);
+const ConnectorEntry *eif_registry_at(size_t index);
 
 /** @brief 試験専用。登録表を空にし、締切りを解除する。 */
 void eif_registry_reset(void);

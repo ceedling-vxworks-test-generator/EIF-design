@@ -17,7 +17,7 @@ static _Atomic(EIF_ControlDoneFn) s_done = NULL;
  * @param[in] id 公開要求ID
  * @return 対応表の行。無ければNULL（＝この機種では公開しない）
  */
-static const EIF_PclRequestMap *find(eif_request_id_t id)
+static const PclRequestMapping *find(eif_request_id_t id)
 {
     for (size_t i = 0U; i < g_pcl_request_map_count; i++) {
         if (g_pcl_request_map[i].public_id == id) {
@@ -119,12 +119,12 @@ static bool ctl_is_supported(eif_request_id_t id)
  */
 static EIF_Result ctl_submit(eif_request_id_t id, EIF_Ticket *out)
 {
-    const EIF_PclRequestMap *m = find(id);
+    const PclRequestMapping *m = find(id);
     if ((m == NULL) || (out == NULL)) {
         return EIF_ERR_NOT_EXPOSED;
     }
     /* 完了時に呼んでもらう関数として pcl_accessor_on_completed を渡す */
-    const external_request_result_t r = ExternalRequestIngressSubmit(m->product_request, pcl_accessor_on_completed);
+    const external_request_result_t r = ExternalRequestIngressSubmit(m->pcl_id, pcl_accessor_on_completed);
     if (r.api_result != UC_OK) {
         return pcl_accessor_map_uc(r.api_result);
     }

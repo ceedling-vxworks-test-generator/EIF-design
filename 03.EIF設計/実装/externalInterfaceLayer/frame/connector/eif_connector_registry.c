@@ -11,7 +11,7 @@
 #include "eif_frame_internal.h"
 #include "eif_lock.h"
 
-static eif_connector_t s_connectors[EIF_MAX_CONNECTORS]; /**< 登録表（登録順。index＋1 ＝ Connector ID） */
+static ConnectorEntry s_connectors[EIF_MAX_CONNECTORS]; /**< 登録表（登録順。index＋1 ＝ Connector ID） */
 static size_t s_count = 0U;                               /**< 登録済みの件数 */
 static atomic_bool s_closed = false;                      /**< 締切り済み（EIF_Start() 後）なら true */
 static eif_mutex_t s_lock = EIF_MUTEX_INITIALIZER;        /**< 登録中の保護 */
@@ -126,12 +126,14 @@ EIF_Result EIF_RegisterConnector(const EIF_ConnectorDesc *desc, EIF_ConnectorId 
         return EIF_ERR_BUSY;
     }
 
-    eif_connector_t *c = &s_connectors[s_count];
+    ConnectorEntry *c = &s_connectors[s_count];
     memset(c, 0, sizeof(*c));
     c->id = (EIF_ConnectorId)(s_count + 1U);
-    c->desc = *desc;
-    c->desc.subscriptions = NULL; /* 呼出元の配列は保持しない。登録表へ写す */
-    c->desc.subscription_count = 0U;
+    c->name = desc->name;
+    c->on_request_completed = desc->on_request_completed;
+    c->on_event = desc->on_event;
+    c->user_context = desc->user_context;
+    /* 呼出元の配列は保持しない。登録表へ写す */
     for (size_t i = 0U; i < desc->subscription_count; i++) {
         c->subscriptions[i] = desc->subscriptions[i];
     }
@@ -158,7 +160,7 @@ void eif_registry_close(void)
  * @param[in] id Connector ID
  * @return 登録内容。未登録・締切り前ならNULL
  */
-const eif_connector_t *eif_registry_get(EIF_ConnectorId id)
+const ConnectorEntry *eif_registry_get(EIF_ConnectorId id)
 {
     if ((id == 0U) || (id > EIF_MAX_CONNECTORS)) {
         return NULL;
@@ -171,7 +173,7 @@ const eif_connector_t *eif_registry_get(EIF_ConnectorId id)
  * @param[in] index 0から
  * @return 登録内容。範囲外・締切り前ならNULL（締切り前は登録中の可能性があるため返さない）
  */
-const eif_connector_t *eif_registry_at(size_t index)
+const ConnectorEntry *eif_registry_at(size_t index)
 {
     if (!atomic_load(&s_closed) || (index >= s_count)) {
         return NULL;

@@ -8,7 +8,7 @@
 #include "pcl_accessor.h"
 
 /** @brief 対応表。1行＝1公開要求。 */
-const EIF_PclRequestMap g_pcl_request_map[] = {
+const PclRequestMapping g_pcl_request_map[] = {
     { EIF_REQ_PRINT,             PRODUCT_REQUEST_ID_PRINT },
     { EIF_REQ_HEAD_CLEANING,     PRODUCT_REQUEST_ID_NORMAL_PURGE_ALL },
     { EIF_REQ_WIPER_MAINTENANCE, PRODUCT_REQUEST_ID_WIPE_ALL },

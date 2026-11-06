@@ -62,17 +62,20 @@ static bool merge_network(const void *current, const void *patch, void *out)
 
 /* ---------------------------------------------------------------- 設定定義表（機種によらない） */
 
-/** @brief 設定定義表の1行。公開設定が増えたときだけ行を追加する。 */
+/** @brief マージ関数：現在値＋パッチ → 合成結果。 */
+typedef bool (*MergeFunction)(const void *current, const void *patch, void *out);
+
+/** @brief 設定定義表の1行（詳細設計書 3.2.4 SettingDefinition）。公開設定が増えたときだけ行を追加する。 */
 typedef struct {
-    eif_setting_id_t setting_id;  /**< 公開設定ID */
-    eif_info_id_t current_info;   /**< 現在値を取る公開情報 */
-    size_t public_size;           /**< 公開モデルのsizeof */
-    size_t patch_size;            /**< パッチモデルのsizeof */
-    bool (*merge)(const void *current, const void *patch, void *out); /**< マージ関数 */
-} setting_def_t;
+    eif_setting_id_t setting_id;    /**< 公開設定ID */
+    eif_info_id_t current_info_id;  /**< 現在値を取る公開情報ID */
+    size_t public_size;             /**< 公開モデルのsizeof */
+    size_t patch_size;              /**< パッチモデルのsizeof */
+    MergeFunction merge_func;       /**< 現在値＋パッチ → 合成結果 */
+} SettingDefinition;
 
 /** @brief 設定定義表。 */
-static const setting_def_t k_settings[] = {
+static const SettingDefinition k_settings[] = {
     { EIF_SETTING_NETWORK, EIF_INFO_NETWORK_SETTINGS, sizeof(eif_network_settings_t),
       sizeof(eif_network_settings_patch_t), merge_network },
 };
@@ -106,7 +109,7 @@ static _Alignas(max_align_t) unsigned char s_merged[EIF_PUBLIC_MODEL_MAX];  /**<
 EIF_Result EIF_PatchSetting(EIF_ConnectorId origin, eif_setting_id_t setting_id, const void *patch,
                             size_t patch_size, uint64_t origin_token, EIF_RequestHandle *out_handle)
 {
-    const setting_def_t *d = NULL;
+    const SettingDefinition *d = NULL;
     EIF_Ticket ticket = 0U;
     EIF_Result r;
 
@@ -128,7 +131,7 @@ EIF_Result EIF_PatchSetting(EIF_ConnectorId origin, eif_setting_id_t setting_id,
     }
     /* 定義表にあり、かつ機種が設定と現在値の情報の両方を公開している場合だけ受け付ける */
     const EIF_AccessorSet *acc = eif_frame_accessors();
-    if ((d == NULL) || !acc->setting->is_supported(setting_id) || !acc->info->is_supported(d->current_info)) {
+    if ((d == NULL) || !acc->setting->is_supported(setting_id) || !acc->info->is_supported(d->current_info_id)) {
         return EIF_ERR_NOT_EXPOSED;
     }
     if (patch_size != d->patch_size) {
@@ -137,9 +140,9 @@ EIF_Result EIF_PatchSetting(EIF_ConnectorId origin, eif_setting_id_t setting_id,
 
     /* 現在値の読込み〜保存の区間を排他する（同時PATCHで更新が消えないようにする） */
     eif_mutex_lock(&s_lock);
-    r = acc->info->read(d->current_info, s_current, d->public_size);
+    r = acc->info->read(d->current_info_id, s_current, d->public_size);
     if (r == EIF_OK) {
-        (void)d->merge(s_current, patch, s_merged);
+        (void)d->merge_func(s_current, patch, s_merged);
         r = acc->setting->store(setting_id, s_merged, d->public_size, &ticket);
     }
     eif_mutex_unlock(&s_lock);

@@ -52,14 +52,14 @@ static bool string_to_ipv4(const char *s, size_t s_size, uint8_t out[4])
 
 /* ---------------------------------------------------------------- ネットワーク設定 */
 
-bool mp_network_to_public(const EIF_RefView *src, size_t n, void *out_public, size_t size);
+bool mp_network_to_public(const RefView *src, size_t n, void *out_public, size_t size);
 bool mp_network_from_public(const void *merged, const void *current_public, const void *current_ref, void *out_ref,
                             size_t ref_size);
-bool mp_alarm_list_to_public(const EIF_RefView *src, size_t n, void *out_public, size_t size);
+bool mp_alarm_list_to_public(const RefView *src, size_t n, void *out_public, size_t size);
 bool mp_fault_to_event(eif_event_id_t id, const void *ref_message, EIF_Event *out);
 
 /**
- * @brief ネットワーク設定：REFの値 → 公開モデル（EIF_RefToPublicFn）。
+ * @brief ネットワーク設定：REFの値 → 公開モデル（ToPublicFunction）。
  *
  * @param[in]  src        [0] RIM_network_info_t、[1] ホスト名、[2] MACアドレス（6バイト）
  * @param[in]  n          src の要素数（3であること）
@@ -67,7 +67,7 @@ bool mp_fault_to_event(eif_event_id_t id, const void *ref_message, EIF_Event *ou
  * @param[in]  size       out_public のサイズ
  * @return 変換できたら true
  */
-bool mp_network_to_public(const EIF_RefView *src, size_t n, void *out_public, size_t size)
+bool mp_network_to_public(const RefView *src, size_t n, void *out_public, size_t size)
 {
     eif_network_settings_t *out = (eif_network_settings_t *)out_public;
     if ((n != 3U) || (size != sizeof(*out))) {
@@ -97,7 +97,7 @@ bool mp_network_to_public(const EIF_RefView *src, size_t n, void *out_public, si
 }
 
 /**
- * @brief ネットワーク設定：マージ済みの公開モデル → REFの型（EIF_RefFromPublicFn）。
+ * @brief ネットワーク設定：マージ済みの公開モデル → REFの型（FromPublicFunction）。
  *
  * @param[in]  merged         マージ済みの eif_network_settings_t
  * @param[in]  current_public 現在値の eif_network_settings_t
@@ -142,7 +142,7 @@ static void fault_to_alarm(RIM_FaultCode code, eif_alarm_t *out)
 }
 
 /**
- * @brief アラーム一覧：REFの異常情報リスト → 公開アラーム一覧（EIF_RefToPublicFn）。
+ * @brief アラーム一覧：REFの異常情報リスト → 公開アラーム一覧（ToPublicFunction）。
  *
  * 発生中（RIM_FAULT_STATE_ACTIVE）の異常だけを、EIF_ALARM_LIST_MAX 件まで詰める。
  * 取得（EIF_GetInfo）用。発生／解消のイベントはREFの通知から mp_fault_to_event() で作る。
@@ -153,7 +153,7 @@ static void fault_to_alarm(RIM_FaultCode code, eif_alarm_t *out)
  * @param[in]  size       out_public のサイズ
  * @return 変換できたら true
  */
-bool mp_alarm_list_to_public(const EIF_RefView *src, size_t n, void *out_public, size_t size)
+bool mp_alarm_list_to_public(const RefView *src, size_t n, void *out_public, size_t size)
 {
     eif_alarm_list_t *out = (eif_alarm_list_t *)out_public;
     if ((n != 1U) || (size != sizeof(*out))) {
@@ -175,7 +175,7 @@ bool mp_alarm_list_to_public(const EIF_RefView *src, size_t n, void *out_public,
 /* ---------------------------------------------------------------- エラーの発生／解消（イベント） */
 
 /**
- * @brief エラーの発生／解消：REFの通知内容 → 公開イベント（EIF_RefToEventFn）。
+ * @brief エラーの発生／解消：REFの通知内容 → 公開イベント（ToEventFunction）。
  *
  * 発生／解消の判定はREF（RIM）が行い、異常1件ごとに通知する前提。EIFは前回値を持たない。
  * 暫定：RIMの異常1件ごとの通知は未提供のため、通知内容を RIM_FaultInfo（異常1件）とみなす。
@@ -205,7 +205,7 @@ bool mp_fault_to_event(eif_event_id_t id, const void *ref_message, EIF_Event *ou
 /* ---------------------------------------------------------------- 対応表 */
 
 /** @brief 情報の対応表。1行＝1公開情報。 */
-const EIF_RefInfoMap g_ref_info_map[] = {
+const RefInfoMapping g_ref_info_map[] = {
     { EIF_INFO_NETWORK_SETTINGS,
       { RI_DATA_NETWORK_INFO, RI_DATA_HOSTNAME, RI_DATA_MACADDRESS },
       { sizeof(RIM_network_info_t), RIM_HOSTNAME_LEN, RIM_MACADDRESS_LEN }, 3U,
@@ -218,7 +218,7 @@ const EIF_RefInfoMap g_ref_info_map[] = {
 const size_t g_ref_info_map_count = sizeof(g_ref_info_map) / sizeof(g_ref_info_map[0]);
 
 /** @brief 設定の対応表。1行＝1公開設定。 */
-const EIF_RefSettingMap g_ref_setting_map[] = {
+const RefSettingMapping g_ref_setting_map[] = {
     { EIF_SETTING_NETWORK, EIF_INFO_NETWORK_SETTINGS, RI_DATA_NETWORK_INFO, sizeof(RIM_network_info_t),
       mp_network_from_public },
 };
@@ -229,7 +229,7 @@ const size_t g_ref_setting_map_count = sizeof(g_ref_setting_map) / sizeof(g_ref_
  * @brief イベントの対応表。1行＝1公開イベント。
  * 暫定：REFの通知は異常情報リスト（RI_DATA_FAULT_INFO_LIST）の購読で受け、変換関数で発生／解消に振り分ける。
  */
-const EIF_RefEventMap g_ref_event_map[] = {
+const RefEventMapping g_ref_event_map[] = {
     { EIF_EVT_ERROR_RAISED,   RI_DATA_FAULT_INFO_LIST, true, false, mp_fault_to_event },
     { EIF_EVT_ERROR_RESOLVED, RI_DATA_FAULT_INFO_LIST, true, false, mp_fault_to_event },
 };

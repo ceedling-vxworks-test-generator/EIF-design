@@ -44,7 +44,7 @@
     "pcl_accessor_on_completed": "inn",
     "on_ref_notified": "inn"
   },
-  "conversion_function_patterns": ["^map_", "_map_", "^to_uc$", "_to_public$", "_from_public$", "^merge_", "_to_request$", "^request_to_", "^job_to_", "^fault_to_", "^ipv4_to_", "^string_to_"],
+  "conversion_function_patterns": ["^map_", "_map_", "^to_uc$", "_to_public$", "_from_public$", "^merge_", "_to_request$", "^request_to_", "^job_to_", "_mapping_to_", "_mapping_outcome_to_", "^fault_to_", "^ipv4_to_", "^string_to_"],
   "flows": [
     {"name": "初期化：EIF_Setup → EIF_Start", "from": "main", "start": ["EIF_Setup", "EIF_Start"]},
     {"name": "Connector登録：EifApiServerConnector_Setup", "from": "main", "start": ["EifApiServerConnector_Setup"]},

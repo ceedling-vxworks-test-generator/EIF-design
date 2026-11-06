@@ -20,14 +20,14 @@ void eif_dispatch_event(const EIF_Event *event, uint32_t connector_mask)
         return;
     }
     for (size_t i = 0U; (i < EIF_MAX_CONNECTORS) && (connector_mask != 0U); i++) {
-        const eif_connector_t *c = eif_registry_at(i);
+        const ConnectorEntry *c = eif_registry_at(i);
         if (c == NULL) {
             break; /* 登録はここまで */
         }
         /* 購読要求を出したConnectorのうち、on_event を持つものへ届ける */
         const uint32_t bit = 1UL << ((unsigned)c->id - 1U);
-        if (((connector_mask & bit) != 0U) && (c->desc.on_event != NULL)) {
-            c->desc.on_event(event, c->desc.user_context);
+        if (((connector_mask & bit) != 0U) && (c->on_event != NULL)) {
+            c->on_event(event, c->user_context);
         }
     }
 }

@@ -21,20 +21,20 @@ typedef enum {
     SLOT_FREE = 0,
     SLOT_ACTIVE,          /**< 受付済み、終端待ち */
     SLOT_EARLY_COMPLETED  /**< 台帳登録より先に完了が届いた */
-} slot_state_t;
+} SlotState;
 
 /** @brief 台帳エントリ。 */
 typedef struct {
-    slot_state_t state;               /**< 状態 */
+    SlotState state;               /**< 状態 */
     EIF_RequestHandle handle;         /**< EIFが払い出した要求ハンドル */
     EIF_Ticket ticket;                /**< Accessorが払い出したチケット（検索キー） */
     EIF_ConnectorId origin;           /**< 要求元のConnector */
     uint64_t origin_token;            /**< 要求元トークン */
     eif_request_id_t request_id;      /**< 公開要求ID */
     EIF_RequestOutcome early_outcome; /**< 先着完了の終端結果（SLOT_EARLY_COMPLETED のときだけ有効） */
-} slot_t;
+} RequestEntry;
 
-static slot_t s_slots[EIF_TRACKER_CAPACITY];      /**< 要求台帳（固定長） */
+static RequestEntry s_slots[EIF_TRACKER_CAPACITY];      /**< 要求台帳（固定長） */
 static eif_mutex_t s_lock = EIF_MUTEX_INITIALIZER; /**< 台帳の保護 */
 static atomic_uint_fast64_t s_next_handle = 1U;   /**< 次に払い出す要求ハンドル */
 
@@ -45,7 +45,7 @@ static atomic_uint_fast64_t s_next_handle = 1U;   /**< 次に払い出す要求�
  * @return 見つかったエントリ。無ければNULL
  * @pre s_lock を保持していること。
  */
-static slot_t *find_by_ticket(EIF_Ticket ticket, slot_state_t state)
+static RequestEntry *find_by_ticket(EIF_Ticket ticket, SlotState state)
 {
     for (size_t i = 0U; i < EIF_TRACKER_CAPACITY; i++) {
         if ((s_slots[i].state == state) && (s_slots[i].ticket == ticket)) {
@@ -60,7 +60,7 @@ static slot_t *find_by_ticket(EIF_Ticket ticket, slot_state_t state)
  * @return 空きエントリ。満杯ならNULL
  * @pre s_lock を保持していること。
  */
-static slot_t *find_free(void)
+static RequestEntry *find_free(void)
 {
     for (size_t i = 0U; i < EIF_TRACKER_CAPACITY; i++) {
         if (s_slots[i].state == SLOT_FREE) {
@@ -101,7 +101,7 @@ EIF_Result eif_tracker_register(EIF_Ticket ticket, EIF_ConnectorId origin, uint6
     out->early_outcome = EIF_OUTCOME_PENDING;
 
     eif_mutex_lock(&s_lock);
-    slot_t *early = find_by_ticket(ticket, SLOT_EARLY_COMPLETED);
+    RequestEntry *early = find_by_ticket(ticket, SLOT_EARLY_COMPLETED);
     if (early != NULL) {
         /* 先着完了：登録せずに解放し、呼出元が要求元へ通知する */
         out->early_completed = true;
@@ -111,7 +111,7 @@ EIF_Result eif_tracker_register(EIF_Ticket ticket, EIF_ConnectorId origin, uint6
         return EIF_OK;
     }
 
-    slot_t *slot = find_free();
+    RequestEntry *slot = find_free();
     if (slot == NULL) {
         eif_mutex_unlock(&s_lock);
         return EIF_ERR_BUSY;
@@ -165,12 +165,12 @@ bool eif_tracker_find(EIF_RequestHandle handle, EIF_Ticket *out_ticket, EIF_Conn
 void eif_tracker_notify(EIF_ConnectorId origin, EIF_RequestHandle handle, eif_request_id_t request_id,
                         uint64_t origin_token, EIF_RequestOutcome outcome)
 {
-    const eif_connector_t *c = eif_registry_get(origin);
+    const ConnectorEntry *c = eif_registry_get(origin);
     if (c == NULL) {
         EIF_LOG_WARN("completion for unknown connector %u", (unsigned)origin);
         return;
     }
-    c->desc.on_request_completed(handle, request_id, origin_token, outcome, c->desc.user_context);
+    c->on_request_completed(handle, request_id, origin_token, outcome, c->user_context);
 }
 
 /**
@@ -186,13 +186,13 @@ void eif_tracker_notify(EIF_ConnectorId origin, EIF_RequestHandle handle, eif_re
  */
 void eif_tracker_on_done(EIF_Ticket ticket, EIF_RequestOutcome outcome)
 {
-    slot_t copy;
+    RequestEntry copy;
 
     eif_mutex_lock(&s_lock);
-    slot_t *slot = find_by_ticket(ticket, SLOT_ACTIVE);
+    RequestEntry *slot = find_by_ticket(ticket, SLOT_ACTIVE);
     if (slot == NULL) {
         /* 台帳登録より先に届いた完了。登録時に通知する */
-        slot_t *free_slot = find_free();
+        RequestEntry *free_slot = find_free();
         if (free_slot != NULL) {
             free_slot->state = SLOT_EARLY_COMPLETED;
             free_slot->ticket = ticket;

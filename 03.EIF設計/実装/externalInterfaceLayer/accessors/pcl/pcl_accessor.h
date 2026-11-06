@@ -15,11 +15,11 @@
 /** @brief 公開要求ID → PCL製品要求ID（機種ごとの対応表の1行）。 */
 typedef struct {
     eif_request_id_t public_id;            /**< 公開要求ID */
-    product_request_id_t product_request;  /**< PCLの製品要求ID */
-} EIF_PclRequestMap;
+    product_request_id_t pcl_id;           /**< その機種の製品要求ID */
+} PclRequestMapping;
 
 /** @brief 機種ごとの対応表（models/<MODEL>/ が定義する）。表に無い要求は公開しない。 */
-extern const EIF_PclRequestMap g_pcl_request_map[];
+extern const PclRequestMapping g_pcl_request_map[];
 /** @brief g_pcl_request_map の行数。 */
 extern const size_t g_pcl_request_map_count;
 

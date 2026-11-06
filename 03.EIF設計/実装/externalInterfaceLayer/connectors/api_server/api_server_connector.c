@@ -1,6 +1,6 @@
 /**
  * @file api_server_connector.c
- * @brief APIサーバー用Connector（詳細設計書 6.6、7.9）。
+ * @brief APIサーバー用Connector（詳細設計書 4.1）。
  *
  * APIサーバーの型 ⇔ EIF公開モデルの詰め替えと、完了・イベントのWebSocket送信だけを行う。
  * PCL・REFの型、機種のことは知らない。APIサーバーのヘッダーを参照してよいのはこのフォルダだけ。
@@ -16,7 +16,11 @@
 
 #include "eif_api.h"
 #include "eif_connector_api_server.h"
+#include "event_mapping.h"
+#include "request_mapping.h"
+#include "response_mapping.h"
 #include "server_api.h"
+#include "subscription_mapping.h"
 
 /** @brief PATCHがPCL経由（EIF_ACCEPTED）になった場合に完了を待つ上限[秒]。 */
 #define CONNECTOR_PATCH_WAIT_SEC (5)
@@ -28,94 +32,19 @@
 static EIF_ConnectorId s_id = 0U;               /**< EIFが払い出した自身のConnector ID */
 static atomic_uint_fast64_t s_next_token = 1U;  /**< 次に使う要求元トークン */
 
-/* ---------------------------------------------------------------- 対応表（接続先依存） */
-
-/** @brief APIサーバーのジョブ種別 ⇔ 公開要求ID。どの機種でも同じ。公開範囲は機種ごとの対応表で決まる。 */
-static const struct {
-    job_type_t job_type;           /**< APIサーバーのジョブ種別 */
-    eif_request_id_t request_id;   /**< 公開要求ID */
-} k_jobs[] = {
-    { JOB_TYPE_PRINT,                  EIF_REQ_PRINT },
-    { JOB_TYPE_TEST_PRINT,             EIF_REQ_TEST_PRINT },
-    { JOB_TYPE_HEAD_CLEANING,          EIF_REQ_HEAD_CLEANING },
-    { JOB_TYPE_WIPER_MAINTENANCE,      EIF_REQ_WIPER_MAINTENANCE },
-    { JOB_TYPE_HUMIDIFIER_MAINTENANCE, EIF_REQ_HUMIDIFIER_MAINTENANCE },
-    { JOB_TYPE_INK_INTRODUCTION,       EIF_REQ_INK_INTRODUCTION },
-    { JOB_TYPE_TUBE_AIR_REMOVAL,       EIF_REQ_TUBE_AIR_REMOVAL },
-    { JOB_TYPE_CAP_PUMP_CHECK,         EIF_REQ_CAP_PUMP_CHECK },
-};
-
-/**
- * @brief ジョブ種別 → 公開要求ID。
- * @param[in]  job ジョブ種別
- * @param[out] out 公開要求ID（見つかった場合だけ書く）
- * @return 対応表にあれば true
- */
-static bool job_to_request(job_type_t job, eif_request_id_t *out)
-{
-    for (size_t i = 0U; i < sizeof(k_jobs) / sizeof(k_jobs[0]); i++) {
-        if (k_jobs[i].job_type == job) {
-            *out = k_jobs[i].request_id;
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * @brief 公開要求ID → ジョブ種別。
- * @param[in]  req 公開要求ID
- * @param[out] out ジョブ種別（見つかった場合だけ書く）
- * @return 対応表にあれば true
- */
-static bool request_to_job(eif_request_id_t req, job_type_t *out)
-{
-    for (size_t i = 0U; i < sizeof(k_jobs) / sizeof(k_jobs[0]); i++) {
-        if (k_jobs[i].request_id == req) {
-            *out = k_jobs[i].job_type;
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * @brief EIF_Result → uc_result_t（詳細設計書 9.4）。
- * @param[in] r EIFの結果コード
- * @return APIサーバーの結果コード
- */
-static uc_result_t to_uc(EIF_Result r)
-{
-    switch (r) {
-    case EIF_OK:
-    case EIF_ACCEPTED:
-        return UC_OK;
-    case EIF_ERR_INVALID_PARAM:
-        return UC_ERR_INVALID_PARAM;
-    case EIF_ERR_NOT_EXPOSED:
-        return UC_ERR_NOT_IMPLEMENTED; /* QA-09 */
-    case EIF_ERR_NOT_FOUND:
-        return UC_ERR_NOT_FOUND;
-    case EIF_ERR_BUSY:
-        return UC_ERR_BUSY;
-    case EIF_ERR_UNAVAILABLE:
-        return UC_ERR_SERVER_UNAVAILABLE;
-    default:
-        return UC_ERR_INTERNAL;
-    }
-}
+/* 対応表（接続先依存）は request_mapping／response_mapping／event_mapping／subscription_mapping に置く */
 
 /* ---------------------------------------------------------------- PATCHの待ち合わせ（PCL経由になった場合） */
 
-/** @brief PATCHの待ち合わせ1件。 */
+/** @brief 完了待ち合わせ表の1行（詳細設計書 3.1.5 PendingEntry）。 */
 typedef struct {
     bool used;                   /**< 使用中 */
     bool done;                   /**< 完了callbackが届いた */
     uint64_t token;              /**< 待っている要求元トークン */
     EIF_RequestOutcome outcome;  /**< 届いた終端結果 */
-} waiter_t;
+} PendingEntry;
 
-static waiter_t s_waiters[CONNECTOR_PATCH_WAITERS];              /**< 待ち合わせ表 */
+static PendingEntry s_pending[CONNECTOR_PATCH_WAITERS];          /**< 完了待ち合わせ表 */
 static pthread_mutex_t s_wait_lock = PTHREAD_MUTEX_INITIALIZER;  /**< 待ち合わせ表の保護 */
 static pthread_cond_t s_wait_cond = PTHREAD_COND_INITIALIZER;    /**< 完了の知らせ */
 
@@ -124,13 +53,13 @@ static pthread_cond_t s_wait_cond = PTHREAD_COND_INITIALIZER;    /**< 完了の�
  * @param[in] token 待つ要求元トークン
  * @return 確保した待ち合わせ。満杯ならNULL
  */
-static waiter_t *waiter_acquire(uint64_t token)
+static PendingEntry *pending_acquire(uint64_t token)
 {
-    waiter_t *w = NULL;
+    PendingEntry *w = NULL;
     pthread_mutex_lock(&s_wait_lock);
     for (size_t i = 0U; i < CONNECTOR_PATCH_WAITERS; i++) {
-        if (!s_waiters[i].used) {
-            w = &s_waiters[i];
+        if (!s_pending[i].used) {
+            w = &s_pending[i];
             w->used = true;
             w->done = false;
             w->token = token;
@@ -143,13 +72,13 @@ static waiter_t *waiter_acquire(uint64_t token)
 
 /**
  * @brief 完了を上限時間まで待ち、待ち合わせを解放する。
- * @param[in,out] w waiter_acquire() で確保した待ち合わせ
+ * @param[in,out] w pending_acquire() で確保した待ち合わせ
  * @retval UC_OK            正常完了
  * @retval UC_ERR_INTERNAL  正常完了以外で終端
  * @retval UC_ERR_TIMEOUT   上限時間（CONNECTOR_PATCH_WAIT_SEC）内に完了しなかった
  * @note APIサーバーのblockingスレッド [C2] で待つ。
  */
-static uc_result_t waiter_wait_and_release(waiter_t *w)
+static uc_result_t pending_wait_and_release(PendingEntry *w)
 {
     struct timespec until;
     uc_result_t r = UC_ERR_TIMEOUT;
@@ -177,14 +106,14 @@ static uc_result_t waiter_wait_and_release(waiter_t *w)
  * @return そのトークンを待っている待ち合わせがあれば true
  * @note EIFの完了callback（PCLの要求処理context [C3]）から呼ばれる。
  */
-static bool waiter_signal(uint64_t token, EIF_RequestOutcome outcome)
+static bool pending_signal(uint64_t token, EIF_RequestOutcome outcome)
 {
     bool found = false;
     pthread_mutex_lock(&s_wait_lock);
     for (size_t i = 0U; i < CONNECTOR_PATCH_WAITERS; i++) {
-        if (s_waiters[i].used && (s_waiters[i].token == token)) {
-            s_waiters[i].done = true;
-            s_waiters[i].outcome = outcome;
+        if (s_pending[i].used && (s_pending[i].token == token)) {
+            s_pending[i].done = true;
+            s_pending[i].outcome = outcome;
             found = true;
             break;
         }
@@ -212,7 +141,7 @@ static uc_result_t rest_get_network(network_settings_t *out)
     }
     const EIF_Result r = EIF_GetInfo(EIF_INFO_NETWORK_SETTINGS, &m, sizeof(m));
     if (r != EIF_OK) {
-        return to_uc(r);
+        return response_mapping_to_external(r);
     }
     memset(out, 0, sizeof(*out));
     out->dhcp = m.dhcp;
@@ -265,19 +194,19 @@ static uc_result_t rest_patch_network(const network_settings_patch_t *in)
     (void)snprintf(p.hostname, sizeof(p.hostname), "%s", in->hostname);
 
     const uint64_t token = CONNECTOR_TOKEN_PATCH_FLAG | atomic_fetch_add(&s_next_token, 1U);
-    waiter_t *w = waiter_acquire(token); /* PCL経由になった場合に備え、先に待ち合わせを用意する（先着完了に備える） */
+    PendingEntry *w = pending_acquire(token); /* PCL経由になった場合に備え、先に待ち合わせを用意する（先着完了に備える） */
     if (w == NULL) {
         return UC_ERR_BUSY;
     }
     const EIF_Result r = EIF_PatchSetting(s_id, EIF_SETTING_NETWORK, &p, sizeof(p), token, &handle);
     if (r == EIF_ACCEPTED) {
-        return waiter_wait_and_release(w); /* RESTは同期応答のため上限時間まで待つ */
+        return pending_wait_and_release(w); /* RESTは同期応答のため上限時間まで待つ */
     }
     /* 同期で終わった（または失敗した）ので待ち合わせは不要 */
     pthread_mutex_lock(&s_wait_lock);
     w->used = false;
     pthread_mutex_unlock(&s_wait_lock);
-    return to_uc(r);
+    return response_mapping_to_external(r);
 }
 
 /**
@@ -301,13 +230,13 @@ static uc_result_t rest_jobs_create(const job_create_request_t *in, accepted_job
     if ((in == NULL) || (out == NULL)) {
         return UC_ERR_INVALID_PARAM;
     }
-    if (!job_to_request(in->job_type, &req)) {
+    if (!request_mapping_to_public(in->job_type, &req)) {
         return UC_ERR_NOT_IMPLEMENTED;
     }
     const uint64_t token = atomic_fetch_add(&s_next_token, 1U);
     const EIF_Result r = EIF_SubmitRequest(s_id, req, NULL, 0U, token, &handle);
     if (r != EIF_ACCEPTED) {
-        return to_uc(r);
+        return response_mapping_to_external(r);
     }
     (void)snprintf(out->job_id, sizeof(out->job_id), "%llu", (unsigned long long)handle);
     return UC_OK;
@@ -334,27 +263,25 @@ static void on_request_completed(EIF_RequestHandle handle, eif_request_id_t requ
     job_event_fields_t fields;
     (void)user_context;
 
-    if (((origin_token & CONNECTOR_TOKEN_PATCH_FLAG) != 0U) && waiter_signal(origin_token, outcome)) {
+    if (((origin_token & CONNECTOR_TOKEN_PATCH_FLAG) != 0U) && pending_signal(origin_token, outcome)) {
         return; /* PATCHの待ち合わせへ渡した */
     }
 
     memset(&ev, 0, sizeof(ev));
     memset(&fields, 0, sizeof(fields));
     (void)snprintf(fields.job_id, sizeof(fields.job_id), "%llu", (unsigned long long)handle);
-    if (!request_to_job(request_id, &fields.job_type)) {
+    if (!request_mapping_to_external(request_id, &fields.job_type)) {
         return; /* ジョブ以外（待ち合わせが時間切れになったPATCH等）は送らない */
     }
-    switch (outcome) {
-    case EIF_OUTCOME_COMPLETED:
-        ev.event_type = WS_EVENT_JOB_COMPLETED;
+    ev.event_type = event_mapping_outcome_to_external(outcome); /* 外部イベント対応表（完了通知） */
+    switch (ev.event_type) {
+    case WS_EVENT_JOB_COMPLETED:
         ev.event_payload.job_completed.job_fields = fields;
         break;
-    case EIF_OUTCOME_CANCELED:
-        ev.event_type = WS_EVENT_JOB_CANCELED;
+    case WS_EVENT_JOB_CANCELED:
         ev.event_payload.job_canceled.job_fields = fields;
         break;
     default:
-        ev.event_type = WS_EVENT_JOB_ERROR;
         ev.event_payload.job_error.job_fields = fields;
         (void)snprintf(ev.event_payload.job_error.error_code, sizeof(ev.event_payload.job_error.error_code),
                        "OUTCOME_%d", (int)outcome);
@@ -369,7 +296,7 @@ static void on_request_completed(EIF_RequestHandle handle, eif_request_id_t requ
  * @param[in] event        公開イベント（呼出し中だけ有効）
  * @param[in] user_context 使わない
  *
- * @note REFの通知ワーカー [C4] から呼ばれる。受信フィルタ外のイベントは届かない。
+ * @note REFの通知ワーカー [C4] から呼ばれる。購読要求に含めていない公開イベントは届かない。
  */
 static void on_event(const EIF_Event *event, void *user_context)
 {
@@ -378,17 +305,18 @@ static void on_event(const EIF_Event *event, void *user_context)
     (void)user_context;
 
     memset(&ev, 0, sizeof(ev));
-    switch (event->event_id) {
-    case EIF_EVT_ERROR_RAISED:
-        ev.event_type = WS_EVENT_ERROR_RAISED;
+    if (!event_mapping_to_external(event->event_id, &ev.event_type)) {
+        return; /* 外部イベント対応表に無い公開イベントは送らない */
+    }
+    switch (ev.event_type) {
+    case WS_EVENT_ERROR_RAISED:
         alarm = &ev.event_payload.error_raised.alarm_fields;
         break;
-    case EIF_EVT_ERROR_RESOLVED:
-        ev.event_type = WS_EVENT_ERROR_RESOLVED;
+    case WS_EVENT_ERROR_RESOLVED:
         alarm = &ev.event_payload.error_resolved.alarm_fields;
         break;
     default:
-        return;
+        return; /* ペイロードの詰め替えを用意していない種別 */
     }
     (void)snprintf(alarm->alarm_id, sizeof(alarm->alarm_id), "%s", event->payload.alarm.alarm_id);
     (void)snprintf(alarm->alarm_code, sizeof(alarm->alarm_code), "%s", event->payload.alarm.alarm_code);
@@ -409,17 +337,12 @@ static void on_event(const EIF_Event *event, void *user_context)
  */
 bool EifApiServerConnector_Setup(void)
 {
-    /* 購読要求定義（SubscriptionMapping）。登録時に固定されるため、受け取りうる通知をすべて並べる */
-    static const EIF_SubscriptionRequest k_subscriptions[] = {
-        { .id = EIF_EVT_ERROR_RAISED, .type = EIF_SUBSCRIBE_ON_CHANGE, .interval_ms = 0U },
-        { .id = EIF_EVT_ERROR_RESOLVED, .type = EIF_SUBSCRIBE_ON_CHANGE, .interval_ms = 0U },
-    };
     const EIF_ConnectorDesc desc = {
         .name = "api_server",
         .on_request_completed = on_request_completed,
         .on_event = on_event,
-        .subscriptions = k_subscriptions,
-        .subscription_count = sizeof(k_subscriptions) / sizeof(k_subscriptions[0]),
+        .subscriptions = g_subscription_mapping,           /* 購読要求定義（3.1.4） */
+        .subscription_count = g_subscription_mapping_count,
         .user_context = NULL,
     };
     server_rest_callbacks_t cbs;

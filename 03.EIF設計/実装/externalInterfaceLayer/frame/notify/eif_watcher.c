@@ -18,9 +18,9 @@ typedef struct {
     EIF_SubscriptionRequest request; /**< 公開イベント・通知方法・周期 */
     uint32_t connector_mask;         /**< bit (ID-1) ＝ その購読要求を出したConnector */
     bool watching;                   /**< 下位IFへ監視を依頼済み */
-} subscription_entry_t;
+} SubscriptionEntry;
 
-static subscription_entry_t s_subs[EIF_MAX_SUBSCRIPTIONS]; /**< 購読表（EIF_Start() で作り、以降は不変） */
+static SubscriptionEntry s_subs[EIF_MAX_SUBSCRIPTIONS]; /**< 購読表（EIF_Start() で作り、以降は不変） */
 static size_t s_sub_count = 0U;                            /**< 購読表の行数 */
 static bool s_built = false;                               /**< 購読表を作った（再試行では作り直さない） */
 
@@ -44,7 +44,7 @@ static EIF_Result build_table(void)
 {
     s_sub_count = 0U;
     for (size_t i = 0U; i < EIF_MAX_CONNECTORS; i++) {
-        const eif_connector_t *c = eif_registry_at(i);
+        const ConnectorEntry *c = eif_registry_at(i);
         if (c == NULL) {
             break; /* 登録はここまで */
         }
@@ -75,14 +75,14 @@ static EIF_Result build_table(void)
  * @brief システム情報IFから呼ばれる受け口。公開イベントを、購読表の行の配信先へ渡す。
  *
  * @param[in] event 公開イベント（REFの通知1件分。呼出し中だけ有効）
- * @param[in] ctx   watch_event() で渡した購読表の行（subscription_entry_t*）
+ * @param[in] ctx   watch_event() で渡した購読表の行（SubscriptionEntry*）
  *
  * @note REF Accessorから、REFの通知ワーカーのcontext [C4] のまま呼ばれる。
  *       購読表は EIF_Start() 後は不変のため、ロックしない。通知1件につき公開イベント1件。
  */
 static void on_info_event(const EIF_Event *event, void *ctx)
 {
-    const subscription_entry_t *e = (const subscription_entry_t *)ctx;
+    const SubscriptionEntry *e = (const SubscriptionEntry *)ctx;
 
     if ((event == NULL) || (e == NULL) || (event->event_id <= EIF_EVT_INVALID) ||
         (event->event_id >= EIF_EVT_COUNT) || (event->event_id != e->request.id)) {
@@ -118,7 +118,7 @@ EIF_Result eif_watcher_start(void)
         s_built = true;
     }
     for (size_t i = 0U; i < s_sub_count; i++) {
-        subscription_entry_t *e = &s_subs[i];
+        SubscriptionEntry *e = &s_subs[i];
         if (e->watching) {
             continue; /* 前回の EIF_Start() で依頼済み（失敗後の再試行） */
         }

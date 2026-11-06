@@ -3,7 +3,7 @@
  * @brief REF Accessorの共通処理。RIMのAPIを呼び、対応表の変換関数でREFの型と公開モデルを相互に変換する。
  *
  * 機種ごとの違い（REFのID・型・変換）は models/<MODEL>/ の対応表だけに置く。
- * REFから取得した値はコピーせず、ポインタ（EIF_RefView）のまま変換関数へ渡す。
+ * REFから取得した値はコピーせず、ポインタ（RefView）のまま変換関数へ渡す。
  */
 #include <stdalign.h>
 #include <string.h>
@@ -15,16 +15,16 @@
 /** @brief 監視の登録表の行数（Frameの購読表の上限と同じ）。 */
 #define REF_MAX_WATCH (8U)
 
-/** @brief 監視の登録表の1行（詳細設計書 3.3.5 WatchEntry。REFの購読IDと、Frameの受け口の対応）。 */
+/** @brief 監視登録表の1行（詳細設計書 3.3.5 WatchEntry。REFの購読IDと、Frameの受け口の対応）。 */
 typedef struct {
     bool used;                   /**< 使用中 */
     uint64_t subscription_id;    /**< REFが払い出した購読ID */
-    const EIF_RefEventMap *map;  /**< イベントの対応表の行 */
+    const RefEventMapping *map;  /**< イベントの対応表の行 */
     EIF_InfoEventFn fn;          /**< Frameの受け口（on_info_event） */
     void *ctx;                   /**< Frameの購読表の行 */
-} watch_t;
+} WatchEntry;
 
-static watch_t s_watch[REF_MAX_WATCH]; /**< 監視の登録表（EIF_Start() 後は不変） */
+static WatchEntry s_watch[REF_MAX_WATCH]; /**< 監視の登録表（EIF_Start() 後は不変） */
 
 /**
  * @brief REFの結果コード → EIF_Result（詳細設計書 9.3）。
@@ -50,10 +50,10 @@ static EIF_Result map_ri(RIStatus s)
  * @param[in] id 公開情報ID
  * @return 対応表の行。無ければNULL（＝この機種では公開しない）
  */
-static const EIF_RefInfoMap *find_info(eif_info_id_t id)
+static const RefInfoMapping *find_info(eif_info_id_t id)
 {
     for (size_t i = 0U; i < g_ref_info_map_count; i++) {
-        if (g_ref_info_map[i].info_id == id) {
+        if (g_ref_info_map[i].public_info_id == id) {
             return &g_ref_info_map[i];
         }
     }
@@ -65,10 +65,10 @@ static const EIF_RefInfoMap *find_info(eif_info_id_t id)
  * @param[in] id 公開イベントID
  * @return 対応表の行。無ければNULL（＝この機種では通知しない）
  */
-static const EIF_RefEventMap *find_event(eif_event_id_t id)
+static const RefEventMapping *find_event(eif_event_id_t id)
 {
     for (size_t i = 0U; i < g_ref_event_map_count; i++) {
-        if (g_ref_event_map[i].event_id == id) {
+        if (g_ref_event_map[i].public_event_id == id) {
             return &g_ref_event_map[i];
         }
     }
@@ -80,10 +80,10 @@ static const EIF_RefEventMap *find_event(eif_event_id_t id)
  * @param[in] id 公開設定ID
  * @return 対応表の行。無ければNULL（＝この機種では公開しない）
  */
-static const EIF_RefSettingMap *find_setting(eif_setting_id_t id)
+static const RefSettingMapping *find_setting(eif_setting_id_t id)
 {
     for (size_t i = 0U; i < g_ref_setting_map_count; i++) {
-        if (g_ref_setting_map[i].setting_id == id) {
+        if (g_ref_setting_map[i].public_setting_id == id) {
             return &g_ref_setting_map[i];
         }
     }
@@ -102,7 +102,7 @@ static const EIF_RefSettingMap *find_setting(eif_setting_id_t id)
  * @retval EIF_ERR_INTERNAL サイズが一致しない（型の不一致）、dataがNULL
  * @retval その他           RIM_GetBinary() の結果の変換結果
  */
-static EIF_Result read_sources(const uint32_t *ids, const size_t *sizes, size_t count, EIF_RefView *out)
+static EIF_Result read_sources(const uint32_t *ids, const size_t *sizes, size_t count, RefView *out)
 {
     for (size_t i = 0U; i < count; i++) {
         RI_BINARY bin = {0};
@@ -131,17 +131,17 @@ static EIF_Result read_sources(const uint32_t *ids, const size_t *sizes, size_t 
  * @retval EIF_ERR_INTERNAL      変換関数が失敗、型の不一致
  * @retval その他                REFの取得失敗
  */
-static EIF_Result read_public(const EIF_RefInfoMap *m, void *out, size_t size)
+static EIF_Result read_public(const RefInfoMapping *m, void *out, size_t size)
 {
-    EIF_RefView v[EIF_REF_MAX_SOURCES];
+    RefView v[EIF_REF_MAX_SOURCES];
     if (size != m->public_size) {
         return EIF_ERR_INVALID_PARAM;
     }
-    const EIF_Result r = read_sources(m->source_ids, m->source_sizes, m->source_count, v);
+    const EIF_Result r = read_sources(m->ref_ids, m->ref_sizes, m->ref_count, v);
     if (r != EIF_OK) {
         return r;
     }
-    return m->to_public(v, m->source_count, out, size) ? EIF_OK : EIF_ERR_INTERNAL;
+    return m->convert_func(v, m->ref_count, out, size) ? EIF_OK : EIF_ERR_INTERNAL;
 }
 
 /* ---------------------------------------------------------------- システム情報IF（EIF_SystemInfoIf）の実装 */
@@ -163,7 +163,7 @@ static bool info_is_supported(eif_info_id_t id)
  */
 static size_t info_public_size(eif_info_id_t id)
 {
-    const EIF_RefInfoMap *m = find_info(id);
+    const RefInfoMapping *m = find_info(id);
     return (m != NULL) ? m->public_size : 0U;
 }
 
@@ -179,7 +179,7 @@ static size_t info_public_size(eif_info_id_t id)
  */
 static EIF_Result info_read(eif_info_id_t id, void *out, size_t size)
 {
-    const EIF_RefInfoMap *m = find_info(id);
+    const RefInfoMapping *m = find_info(id);
     return (m != NULL) ? read_public(m, out, size) : EIF_ERR_NOT_EXPOSED;
 }
 
@@ -189,7 +189,7 @@ static EIF_Result info_read(eif_info_id_t id, void *out, size_t size)
  * @param[in] type 通知方法
  * @return 指定できれば true
  */
-static bool event_allows(const EIF_RefEventMap *m, EIF_SubscriptionType type)
+static bool event_allows(const RefEventMapping *m, EIF_SubscriptionType type)
 {
     return ((type == EIF_SUBSCRIBE_ON_CHANGE) && m->allow_on_change) ||
            ((type == EIF_SUBSCRIBE_PERIODIC) && m->allow_periodic);
@@ -202,7 +202,7 @@ static bool event_allows(const EIF_RefEventMap *m, EIF_SubscriptionType type)
  */
 static bool info_is_event_supported(const EIF_SubscriptionRequest *req)
 {
-    const EIF_RefEventMap *m = (req != NULL) ? find_event(req->id) : NULL;
+    const RefEventMapping *m = (req != NULL) ? find_event(req->id) : NULL;
     return (m != NULL) && event_allows(m, req->type);
 }
 
@@ -219,11 +219,11 @@ static bool info_is_event_supported(const EIF_SubscriptionRequest *req)
 static void on_ref_notified(uint64_t subscription_id, const void *message)
 {
     for (size_t i = 0U; i < REF_MAX_WATCH; i++) {
-        const watch_t *w = &s_watch[i];
+        const WatchEntry *w = &s_watch[i];
         if (w->used && (w->subscription_id == subscription_id)) {
             EIF_Event ev;
             memset(&ev, 0, sizeof(ev));
-            if ((message != NULL) && w->map->to_event(w->map->event_id, message, &ev)) {
+            if ((message != NULL) && w->map->convert_func(w->map->public_event_id, message, &ev)) {
                 w->fn(&ev, w->ctx); /* REFの通知contextのままFrameへ */
             }
             return;
@@ -253,7 +253,7 @@ static void on_ref_notified(uint64_t subscription_id, const void *message)
  */
 static EIF_Result info_watch_event(const EIF_SubscriptionRequest *req, EIF_InfoEventFn fn, void *ctx)
 {
-    const EIF_RefEventMap *m = (req != NULL) ? find_event(req->id) : NULL;
+    const RefEventMapping *m = (req != NULL) ? find_event(req->id) : NULL;
     RI_SUBSCRIPTION_REQUEST rreq;
     uint64_t sub_id = 0U;
 
@@ -328,30 +328,30 @@ static EIF_Result setting_store(eif_setting_id_t id, const void *merged, size_t 
 {
     static alignas(max_align_t) unsigned char current_public[REF_WORK_BYTES];
     static alignas(max_align_t) unsigned char out_ref[REF_WORK_BYTES];
-    const EIF_RefSettingMap *s = find_setting(id);
-    EIF_RefView cur;
+    const RefSettingMapping *s = find_setting(id);
+    RefView cur;
 
     (void)out_ticket;
     if (s == NULL) {
         return EIF_ERR_NOT_EXPOSED;
     }
-    const EIF_RefInfoMap *m = find_info(s->current_info);
+    const RefInfoMapping *m = find_info(s->current_info_id);
     if ((m == NULL) || (size != m->public_size) || (size > REF_WORK_BYTES) || (s->ref_size > REF_WORK_BYTES)) {
         return EIF_ERR_INTERNAL;
     }
     /* Frameの設定マージは排他区間内で呼ぶため、ここでの静的領域の利用は直列になる */
     EIF_Result r = read_public(m, current_public, size);
     if (r == EIF_OK) {
-        r = read_sources(&s->ref_data_id, &s->ref_size, 1U, &cur);
+        r = read_sources(&s->ref_id, &s->ref_size, 1U, &cur);
     }
     if (r != EIF_OK) {
         return r;
     }
     memcpy(out_ref, cur.data, s->ref_size); /* 公開モデルに無いREFの項目を保つ */
-    if (!s->from_public(merged, current_public, cur.data, out_ref, s->ref_size)) {
+    if (!s->convert_func(merged, current_public, cur.data, out_ref, s->ref_size)) {
         return EIF_ERR_INVALID_PARAM;
     }
-    return map_ri(RIM_SetBinary(s->ref_data_id, out_ref, s->ref_size));
+    return map_ri(RIM_SetBinary(s->ref_id, out_ref, s->ref_size));
 }
 
 const EIF_SettingStoreIf g_ref_setting_if = {
